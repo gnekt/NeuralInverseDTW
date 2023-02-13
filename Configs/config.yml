@@ -1,0 +1,158 @@
+# Cut a 192 frame T
+# Questo modello usa norm dopo la somma con residual, in piu prima del positional encoding usa normalization.
+
+log_dir: "Models/iDTW"
+save_freq: 1
+device: "cuda:0"
+epochs: 5000
+batch_size: 8
+pretrained_model:
+  path: ""
+  what_to_load:
+    encoder_prenet: True
+    decoder_prenet: True
+    encoder: True
+    encoder_norm: True
+    decoder: True
+    decoder_norm: True
+    depost_interface: True
+    postnet: False
+  layer_freeze_mode:
+    stage_1: # The number indicates layers, starting from bottom, that have to be freezed
+      encoder_prenet: 1
+      encoder: 6
+      decoder_prenet: 1
+      decoder: 6
+      decpost_interface: 1
+      postnet: 0
+    stage_2: # The number indicates layers, starting from bottom, that have to be freezed
+      encoder_prenet: 1
+      encoder: 6
+      decoder_prenet: 1
+      decoder: 6
+      decpost_interface: 1
+      postnet: 0
+    stage_3: # The number indicates layers, starting from bottom, that have to be freezed
+      encoder_prenet: 1
+      encoder: 6
+      decoder_prenet: 1
+      decoder: 6
+      decpost_interface: 1
+      postnet: 0
+    stage_4: # The number indicates layers, starting from bottom, that have to be freezed
+      encoder_prenet: 1
+      encoder: 6
+      decoder_prenet: 1
+      decoder: 6
+      decpost_interface: 1
+      postnet: 0
+    stage_5: # The number indicates layers, starting from bottom, that have to be freezed
+      encoder_prenet: 1
+      encoder: 6
+      decoder_prenet: 1
+      decoder: 2
+      decpost_interface: 1
+      postnet: 0
+    stage_6: # The number indicates layers, starting from bottom, that have to be freezed
+      encoder_prenet: 1
+      encoder: 8
+      decoder_prenet: 0
+      decpost_interface: 1
+      decoder: 0
+      postnet: 0
+    stage_7: # The number indicates layers, starting from bottom, that have to be freezed
+      encoder_prenet: 0
+      encoder: 0
+      decoder_prenet: 0
+      decpost_interface: 1
+      decoder: 0
+      postnet: 0
+  freezing_mode: "Forever" # String -> Could be: Forever / Number of training epoch, Ex. "10"
+    
+tmux: 10
+
+dataset_maker:
+  dataset_output_dir: "Data/"
+
+dataset_configuration:
+  do_dtw: True
+  data_separetor: "|"
+  data_header: ["source_path","reference_path","reference_emotion"]
+  training_set_path: "Data/eng_happy_training_list.txt"
+  validation_set_path: "Data/eng_happy_validation_list.txt"
+
+preprocess_params:
+  sr: 24000
+  spect_params:
+    n_fft: 2048
+    win_length: 1200
+    hop_length: 300
+    mel_fmin: 0.0
+    mel_fmax: 8000.0
+    n_mel_band: 80
+
+training_parameter: 
+  learning_rate: 0.00005
+  warmp_up:
+    warm_up_step: 12000
+    noam_factor: 256
+    
+model_architecture:
+
+  encoder_pre_net:
+    activate: True
+    conv_type: "Linear"
+    input_size: 80
+    output_size: 512
+    layers_configuration: [[80,256,"linear","relu","",0.1],[256,512,"linear","relu","",0]] # [InChannels, OutChannels, KernelSize, PaddingSize, WeightInitialization] x NConvLayer
+
+  encoder:
+    device: "cuda:0"
+    input_size: 512
+    output_size: 512
+    layers_configuration: [["normal",0],["normal",0],["normal",0]] # [LayerType, DropoutProb], LayerType -> (normal, residual)
+    n_heads: 8
+    n_attention_layer: 1
+    conv_ff:
+      conv_type: "Linear" 
+      input_size: 512
+      output_size: 512
+      layers_configuration: [[512,2048,"linear","relu","",0.1],[2048,512,"linear","relu","",.0]] # [InChannels, OutChannels, KernelSize, PaddingSize, WeightInitialization] x NConvLayer
+    dropout: .1
+
+  decoder_pre_net:
+    activate: True
+    conv_type: "Linear"
+    input_size: 80
+    output_size: 512
+    layers_configuration: [[80,256,"linear","relu","",0.1],[256,512,"linear","relu","",.0]] # [InChannels, OutChannels, KernelSize, PaddingSize, WeightInitialization] x NConvLayer
+
+  decoder:
+    device: "cuda:0"
+    architecture: "Custom" # else Custom
+    input_size: 512
+    output_size: 512
+    decoder_postnet_interface_activate: True
+    decoder_postnet_interface_dropout: 0.1
+    decoder_postnet_interface_size: 80
+    decoder_postnet_interface_activation: "sigmoid"
+    layers_configuration: [["normal",0],["normal",0],["normal",0]] # [LayerType, DropoutProb], LayerType -> (normal, residual)
+    n_self_heads: 16
+    n_self_attention_layer: 1
+    n_encdec_heads: 16
+    n_encdec_attention_layer: 1
+    conv_ff:
+      conv_type: "Linear" 
+      input_size: 512
+      output_size: 512
+      layers_configuration: [[512,2048,"linear","relu","",0.1],[2048,512,"linear","relu","",.0]] # [InChannels, OutChannels, KernelSize, PaddingSize] x NConvLayer
+    dropout: .1 # Internal Layer Dropout
+
+  post_net:
+    conv_type: "2D"
+    activate: False
+    is_skip: False
+    input_size: 80
+    output_size: 80
+    layers_configuration: [[1,512,3,"same","linear","relu","",0.2],[512,1024,3,"same","linear","relu","",0.2],[1024,2048,5,"same","linear","relu","",0.2],[2048,512,5,"same","linear","relu","",0.2],[512,1,5,"same","linear","sigmoid","",0]] # [InChannels, OutChannels, KernelSize, PaddingSize] x NConvLayer
+    dropout: .0
