@@ -133,7 +133,7 @@ def main(config_path, num_worker):
 
     losses = Munch(smoothl1=torch.nn.MSELoss(reduction="none"))
     loss = ESTyleLoss(losses, pad_token, device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-6)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
     best_val_loss = float('+inf')
     epoch = 0
     

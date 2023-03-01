@@ -52,9 +52,7 @@ class Decoder(nn.Module):
         
         self.conv1_ffn_norm = nn.LayerNorm(self.input_size)
         self.mlp_ffn_norm = nn.LayerNorm(self.output_size)
-        
-        self.conv1d_ffn = ConvNet1D(Munch(model_architecture.conv1d_ff))
-            
+                    
         self.mlp_ffn = FCNet(Munch(model_architecture.mlp_ff))
         
         self.dropout = nn.Dropout(self.dropout)

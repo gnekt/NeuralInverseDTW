@@ -126,7 +126,7 @@ class ESTyle(nn.Module):
                 self.postnet = ConvNet2D(Munch(self.post_net_parameter))
             if self.post_net_parameter["conv_type"] == "1D":
                 self.postnet = ConvNet1D(Munch(self.post_net_parameter))
-            if self.post_net_parameter["conv_type"] == "Linear":
+            if self.post_net_parameter["conv_type"] == "FC":
                 self.postnet = FCNet(Munch(self.post_net_parameter))
 
     def forward(self, padded_mel_tensor: Tensor, padded_ref_mel_tensor: Tensor, mel_padding_mask: Tensor, ref_mel_padding_mask: Tensor, mel_mask: Tensor, ref_ref_mel_mask: Tensor) -> Tensor:
@@ -149,27 +149,27 @@ class ESTyle(nn.Module):
         
         ###
         encoder_output = self.encoder[0](encoder_input, mel_padding_mask)
+        encoder_output = self.encoder_dropout[0](encoder_output)
         if self.encoder_parameter.layers_configuration[0][1] == "residual":
-            encoder_output = self.encoder_dropout[0](encoder_output)
             encoder_output = self.encoder_norm[0](encoder_output + encoder_input)
             
         for encoder_layer, layer_norm, layer_dropout, (_, layer_type) in zip(self.encoder[1:], self.encoder_norm[1:], self.encoder_dropout[1:], self.encoder_parameter.layers_configuration[1:] ):
             _encoder_output = encoder_layer(encoder_output, mel_padding_mask)
+            _encoder_output = layer_dropout(_encoder_output)
             if layer_type == "residual":
-                _encoder_output = layer_dropout(_encoder_output)
                 _encoder_output = layer_norm(_encoder_output + encoder_output) 
             encoder_output = _encoder_output
         
         ###
         decoder_output =  self.decoder[0](decoder_input, ref_mel_padding_mask, encoder_output, mel_padding_mask)
+        decoder_output = self.decoder_dropout[0](decoder_output)
         if self.decoder_parameter.layers_configuration[0][1] == "residual":
-            decoder_output = self.decoder_dropout[0](decoder_output)
             decoder_output = self.decoder_norm[0](decoder_output + decoder_input)
         
         for decoder_layer, layer_norm, layer_dropout, (_, layer_type) in zip(self.decoder[1:], self.decoder_norm[1:], self.decoder_dropout[1:], self.decoder_parameter.layers_configuration[1:]):
             _decoder_output = decoder_layer(decoder_output, ref_mel_padding_mask, encoder_output, mel_padding_mask)
+            _decoder_output = layer_dropout(_decoder_output)
             if layer_type == "residual":
-                _decoder_output = layer_dropout(_decoder_output)
                 _decoder_output = layer_norm(_decoder_output + decoder_output) 
             decoder_output = _decoder_output
         
@@ -193,7 +193,7 @@ class ESTyle(nn.Module):
     
     
     def encode(self, input, mask):
-        encoder_input = self.encoder_positional_embedding(input)
+        encoder_input = self.encoder_positional_embedding(self.encoder_prenet(input))
         
         ###
         encoder_output = self.encoder[0](encoder_input, mask)
@@ -211,7 +211,7 @@ class ESTyle(nn.Module):
         return encoder_output
     
     def decode(self, input, input_padding_mask, memory, memory_mask):
-        decoder_input = self.decoder_positional_embedding(input)
+        decoder_input = self.decoder_positional_embedding(self.decoder_prenet(input))
         
         decoder_output =  self.decoder[0](decoder_input, input_padding_mask, memory, memory_mask)
         if self.decoder_parameter.layers_configuration[0][1] == "residual":
@@ -235,17 +235,13 @@ class ESTyle(nn.Module):
         ###
         postnet_output = decpost_out
         if self.post_net_parameter["activate"]:
-            decpost_out_norm = self.decpost_interface_norm(decpost_out)
-            postnet_output = self.postnet(decpost_out_norm)
-            if self.post_net_parameter["is_skip"]:
-                postnet_output = self.postnet_dropout(postnet_output)
-                postnet_output = postnet_output + decpost_out_norm
+            postnet_output = self.postnet(postnet_output)
                 
-        return postnet_output
+        return decpost_out
     
     def inference(self, encoder_input_tensor: Tensor, device) -> Tensor:
         encoder_padding_mask = torch.full((1, encoder_input_tensor.shape[1]), False).to(device)
-        decoder_in_tensor = torch.full((1,1,80), 0.).to(device)
+        decoder_in_tensor = torch.full((1,5,80), .5).to(device)
         decoder_padding_mask = torch.full((1, decoder_in_tensor.shape[1]), False).to(device)
         
         with torch.no_grad():
@@ -256,9 +252,6 @@ class ESTyle(nn.Module):
                 decoder_in_tensor = torch.cat((decoder_in_tensor, out[:,-1:,:]), dim=1).to(device)
                 decoder_padding_mask = torch.full((1, decoder_in_tensor.shape[1]), False).to(device)
         
-        postnet_output = out
-        if self.post_net_parameter["activate"]:
-            decpost_out = self.decpost_interface_norm(out)
-            postnet_output = self.postnet(decpost_out)
+        
             
-        return postnet_output
+        return out
