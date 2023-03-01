@@ -82,9 +82,9 @@ def load_data(wav_path: str) -> torch.Tensor:
             (MelBand, T_Mel): Mel-Spectrogram of the wav file
         """
         wave_tensor = generate_wav_tensor(wav_path)
-        tensor = to_melspec(wave_tensor).transpose(1,0)
-        scaled_tensor = scaler.transform(torch.log(tensor+1e-5))
-        return torch.FloatTensor(scaled_tensor)
+        tensor = to_melspec(wave_tensor)
+        scaled_tensor = (torch.log(1e-5 + tensor) - (-4)) / 4
+        return torch.FloatTensor(scaled_tensor).transpose(1,0)
     
 def generate_wav_tensor(wave_path: str) -> torch.Tensor:
     """Private methods that trasform a wav file into a tensor
@@ -102,7 +102,7 @@ def generate_wav_tensor(wave_path: str) -> torch.Tensor:
 
 
 
-in_datta = load_data("0012_000072.wav")
+in_datta = load_data("ex_6_happy_b.wav")
 
 
 model.eval()
@@ -111,7 +111,6 @@ out = model.inference(in_datta.unsqueeze(0).to(device), DEVICE)
 from pickle import load
 
 # out = load(open("Fruits.pkl", "rb"))
-out = (scaler.inverse_transform(out[0].cpu().detach().numpy()) - -4 )/4
 
 # load vocoder
 print("Load vocoder model..")
@@ -122,8 +121,8 @@ _ = vocoder.eval()
 
 
 with torch.no_grad():
-        c = torch.FloatTensor(out)
-        y_out = vocoder.inference(c)
+        c = out.to("cpu")
+        y_out = vocoder.inference(c[0])
         y_out = y_out.view(-1).cpu()
             
 print("storing sample..")

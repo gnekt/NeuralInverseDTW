@@ -46,17 +46,14 @@ class Encoder(nn.Module):
         self.self_attn_norms = clones(nn.LayerNorm(self.input_size) ,self.n_attention)
         self.self_attn_fc_layers =  clones(nn.Linear(self.input_size,self.input_size), self.n_attention)
         
-        self.pre_ffn_norm = nn.LayerNorm(self.input_size)
-        self.post_ffn_norm = nn.LayerNorm(self.output_size)
+        self.conv1_ffn_norm = nn.LayerNorm(self.input_size)
+        self.mlp_ffn_norm = nn.LayerNorm(self.output_size)
         
         self.dropout = nn.Dropout(self.dropout)
         
-        if model_architecture.conv_ff["conv_type"] == "2D":
-            self.ffconvnet = ConvNet2D(Munch(model_architecture.conv_ff))
-        if model_architecture.conv_ff["conv_type"] == "1D":
-            self.ffconvnet = ConvNet1D(Munch(model_architecture.conv_ff))
-        if model_architecture.conv_ff["conv_type"] == "Linear":
-            self.ffconvnet = FCNet(Munch(model_architecture.conv_ff))
+        self.conv1d_ffn = ConvNet1D(Munch(model_architecture.conv1d_ff))
+            
+        self.mlp_ffn = FCNet(Munch(model_architecture.mlp_ff))
         
         
     def forward(self, inputs: Tensor, masks: Tensor) -> Tensor:
@@ -72,9 +69,13 @@ class Encoder(nn.Module):
         attn_out = self.dropout(attn_out)
         inputs = self.self_attn_norms[0](attn_out + inputs)
                 
-        feed_fwd_out = self.ffconvnet(inputs)
-        feed_fwd_out = self.dropout(feed_fwd_out)
-        out = self.post_ffn_norm(feed_fwd_out + inputs)
+        conv_feed_fwd_out = self.conv1d_ffn(inputs)
+        conv_feed_fwd_out = self.dropout(conv_feed_fwd_out)
+        conv_feed_fwd_out = self.conv1_ffn_norm(conv_feed_fwd_out + inputs)
+        
+        mlp_feed_fwd_out = self.mlp_ffn(conv_feed_fwd_out)
+        mlp_feed_fwd_out = self.dropout(mlp_feed_fwd_out)
+        out = self.mlp_ffn_norm(mlp_feed_fwd_out + conv_feed_fwd_out)
         return out
     
         

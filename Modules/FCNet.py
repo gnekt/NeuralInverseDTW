@@ -57,7 +57,7 @@ class FCNet(nn.Module):
                 _activation = self.lrelu(fc_out)
             if layer_configuration[3] == 'tanh':
                 _activation = torch.tanh(fc_out)
-            _input = dropout_l(_activation)
+            _input = dropout_l(norm_l(_activation))
             # if layer_configuration[4] == 'residual':
             #     _activation = dropout_l(_activation)
             #     _input = norm_l((_activation + _input))  # Why this? I need to batch over the embedding dimension, remember the input shape

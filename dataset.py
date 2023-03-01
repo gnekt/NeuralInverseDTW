@@ -1,5 +1,6 @@
 #coding: utf-8
 
+from munch import Munch
 import yaml
 from typing import Tuple, Dict, List
 import os
@@ -23,12 +24,17 @@ import librosa.display
 import audio as audio_to_mel
 from pickle import load
 from my_dtw import compute_dtw
+from ConvNetEmotion.model import ConvNet
+import os.path as osp
+
+
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
 # Do NOT TOUCH
+convnet_config = yaml.safe_load(open("ConvNetEmotion/Configs/config.yml"))
 config = yaml.safe_load(open("Configs/config.yml"))
 MEL_PARAMS = config.get('preprocess_params', {})
 
@@ -56,6 +62,16 @@ r_max = torch.load("dataset/r_max.pt")
 r_min = torch.load("dataset/r_min.pt")
 ###########################################################
 
+convnet = ConvNet(Munch(convnet_config.get("model_architecture")), "cpu")
+# Load checkpoint, if exists
+if os.path.exists(osp.join(convnet_config['log_dir'], 'estyle_best.pth')):
+    print("Found checkpoint.")
+    checkpoint = torch.load(osp.join(convnet_config['log_dir'], 'estyle_best.pth'), map_location="cpu") # Fix from https://github.com/pytorch/pytorch/issues/2830#issuecomment-718816292
+    convnet.load_state_dict(checkpoint["generator"])
+convnet.eval()
+convnet.to("cpu")
+for param in convnet.parameters():
+    param.requires_grad = False
 
 class Dataset(torch.utils.data.Dataset):
     """Dataset container
@@ -78,8 +94,9 @@ class Dataset(torch.utils.data.Dataset):
         self.validation = validation
         self.to_melspec = torchaudio.transforms.MelSpectrogram(**MELSPEC_PARAMS)
         self.scaler: MinMaxScaler = load(open('dataset/scaler.pk', 'rb'))
-        self.max_t_mel = 560 
+        self.max_t_mel = 192 
         self.do_dtw = do_dtw
+        print(validation)
         
     def __len__(self) -> int:
         """Cardinality of the dataset
@@ -101,23 +118,63 @@ class Dataset(torch.utils.data.Dataset):
             ): (Source Spectrogram, Reference Spectrogram)
         """
         row = self.dataset.iloc[idx]
-        mel_tensor = self._load_data(row["source_path"])
-        ref_mel_tensor = self._load_data(row["reference_path"])
-        if self.do_dtw:
-            mel_tensor, warped_ref_mel_tensor = compute_dtw(mel_tensor, ref_mel_tensor)
-        return ref_mel_tensor, warped_ref_mel_tensor, max(ref_mel_tensor.shape[0], warped_ref_mel_tensor.shape[0])
+        random_scale = 0
+        if not self.validation:
+            if random.random() < 0.5:
+                random_scale = random.uniform(0.4,0.9)
+        
+        mel_tensor = self._convnet_load_data(row["source_path"],random_scale)
+        ref_mel_tensor = self._load_data(row["reference_path"],random_scale)
+        
+        if not self.validation:
+            if random.random() < 0.5:
+                noise = torch.randn_like(mel_tensor) * random.uniform(0.1,0.2)
+                mel_tensor = mel_tensor + noise
+            elif random.random() < 0.5:
+                mask_width = random.randint(1,3)
+                seq_len, num_bands = mel_tensor.shape
+                for _ in range(random.randint(1,4)):
+                    # Randomly select a frequency band to mask
+                    center = np.random.randint(low=mask_width, high=num_bands - mask_width)
+                    lower = max(center - mask_width // 2, 0)
+                    upper = min(center + mask_width // 2, num_bands - 1)
+                    mel_tensor[:, lower:upper] = 0.0
+        return mel_tensor, ref_mel_tensor, max([mel_tensor.shape[0], ref_mel_tensor.shape[0]])
 
-    def _load_data(self, wav_path: str) -> torch.Tensor:
+    def _convnet_load_data(self, wav_path: str, random_scale) -> torch.Tensor:
         """Produce mel-spectrogram given a wav file
         Args:
             wav_path (str): Wav path of the source file
         Returns:
             (T_Mel, MelBand): Mel-Spectrogram of the wav file
         """
+        mean = -4
+        std = 4
         wave_tensor: Tensor = self._generate_wav_tensor(wav_path)
-        tensor: Tensor = self.to_melspec(wave_tensor).transpose(1,0)
-        scaled_tensor: Tensor = self.scaler.transform(torch.log(tensor+1e-5))
-        return torch.FloatTensor(scaled_tensor)
+        if random_scale != 0:
+             wave_tensor = random_scale * wave_tensor    
+        tensor: Tensor = self.to_melspec(wave_tensor)
+        #scaled_tensor: Tensor = self.scaler.transform(torch.log(tensor+1e-5))
+        scaled_tensor: Tensor = (torch.log(1e-5 + tensor) - mean) / std
+        with torch.no_grad():
+            out = convnet(scaled_tensor.to("cpu").unsqueeze(0).unsqueeze(0))
+        return out[0,0,:,:].to("cpu").transpose(1,0)
+    
+    def _load_data(self, wav_path: str, random_scale) -> torch.Tensor:
+        """Produce mel-spectrogram given a wav file
+        Args:
+            wav_path (str): Wav path of the source file
+        Returns:
+            (T_Mel, MelBand): Mel-Spectrogram of the wav file
+        """
+        mean = -4
+        std = 4
+        wave_tensor: Tensor = self._generate_wav_tensor(wav_path)
+        if random_scale != 0:
+            wave_tensor = random_scale * wave_tensor
+        tensor: Tensor = self.to_melspec(wave_tensor)
+        scaled_tensor: Tensor = (torch.log(1e-5 + tensor) - mean) / std
+        return torch.FloatTensor(scaled_tensor).transpose(1,0)
     
     def _generate_wav_tensor(self, wave_path: str) -> torch.Tensor:
         """Private methods that trasform a wav file into a tensor
@@ -149,6 +206,7 @@ class Collater(object):
         """        
         self.batch_size = batch_size
         self.do_dtw = do_dtw
+        self.max_t_mel = 192
         
     def _generate_square_subsequent_mask(self, size: int) -> torch.Tensor:
         """Generate the mask for the self-attention of the decoder
@@ -191,10 +249,9 @@ class Collater(object):
                 7) Padding mask for decoder input
         """
         batch_size = len(batch)
-        max_t_mel = max([item[2] for item in batch])
-        max_lenght_mel_tensor = max_t_mel + (2*5)  # 5 token of sos and 5 token of bos
+        max_lenght_mel_tensor = self.max_t_mel + (2*5)  # 5 token of sos and 5 token of bos
         
-        max_lenght_ref_mel_tensor = max_t_mel + 1*5
+        max_lenght_ref_mel_tensor = self.max_t_mel + 1*5
         # Why Only +1? Because we need to shift the reference, usual way of doing with transformes(encoder-decoder)
         
         padded_mel_tensor = torch.full(
@@ -219,8 +276,13 @@ class Collater(object):
         ref_mel_input_mask = torch.full(
             (batch_size, max_lenght_ref_mel_tensor, max_lenght_ref_mel_tensor),  float('-inf'))  # ALL MASKED
 
-        for bid, (mel, ref_mel, _) in enumerate(batch):
-                
+        for bid, (mel, ref_mel, max_len) in enumerate(batch):
+            
+            if max_len > self.max_t_mel: # if mel has a len greater than the max allowed, trim it! 
+                random_start = np.random.randint(0, max_len - self.max_t_mel)
+                mel = mel[random_start:random_start + self.max_t_mel, :]
+                ref_mel =  ref_mel[random_start:random_start + self.max_t_mel, :] 
+            
             # ADD BOS and EOS
             # Input Mel
             for _ in range(5):
@@ -261,6 +323,7 @@ def build_dataloader(dataset_path: str,
                      batch_size: int = 4,
                      num_workers: int = 1,
                      device: str = 'cpu',
+                     validation = False,
                      collate_config: dict = {}) -> DataLoader:
     """Make a dataloader
     Args:
@@ -290,7 +353,7 @@ def build_dataloader(dataset_path: str,
 
     
     
-    dataset = Dataset(dataset)
+    dataset = Dataset(dataset, validation=validation)
 
     collate_fn = Collater(batch_size, do_dtw)
 

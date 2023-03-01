@@ -50,15 +50,12 @@ class Decoder(nn.Module):
         self.attn_norms = clones(nn.LayerNorm(self.input_size) ,model_architecture.n_encdec_attention_layer)
         self.attn_fc_layers =  clones(nn.Linear(self.input_size,self.input_size), model_architecture.n_encdec_attention_layer)
         
-        self.pre_ffn_norm = nn.LayerNorm(self.input_size)
-        self.post_ffn_norm = nn.LayerNorm(self.output_size)
+        self.conv1_ffn_norm = nn.LayerNorm(self.input_size)
+        self.mlp_ffn_norm = nn.LayerNorm(self.output_size)
         
-        if model_architecture.conv_ff["conv_type"] == "2D":
-            self.ffconvnet = ConvNet2D(Munch(model_architecture.conv_ff))
-        if model_architecture.conv_ff["conv_type"] == "1D":
-            self.ffconvnet = ConvNet1D(Munch(model_architecture.conv_ff))
-        if model_architecture.conv_ff["conv_type"] == "Linear":
-            self.ffconvnet = FCNet(Munch(model_architecture.conv_ff))
+        self.conv1d_ffn = ConvNet1D(Munch(model_architecture.conv1d_ff))
+            
+        self.mlp_ffn = FCNet(Munch(model_architecture.mlp_ff))
         
         self.dropout = nn.Dropout(self.dropout)
         
@@ -94,12 +91,18 @@ class Decoder(nn.Module):
         inputs = self.self_attn_norms[0](inputs + attn_output)
 
         attn_output, _ = self.attn[0](inputs, memories, memories, memories_masks.unsqueeze(1))
+        attn_output = self.attn_norms[0](attn_output)
+        
+        attn_output, _ = self.attn[1](attn_output, memories, memories, memories_masks.unsqueeze(1))
+        attn_output = self.attn_norms[1](attn_output)
+        
+        attn_output, _ = self.attn[2](attn_output, memories, memories, memories_masks.unsqueeze(1))
         attn_output = self.dropout(attn_output)
-        inputs = self.attn_norms[0](inputs + attn_output)
-
-        feed_fwd_out = self.ffconvnet(inputs) 
-        feed_fwd_out = self.dropout(feed_fwd_out)
-        out = self.post_ffn_norm(feed_fwd_out + inputs)
+        inputs = self.attn_norms[2](inputs + attn_output)
+        
+        mlp_feed_fwd_out = self.mlp_ffn(inputs)
+        mlp_feed_fwd_out = self.dropout(mlp_feed_fwd_out)
+        out = self.mlp_ffn_norm(mlp_feed_fwd_out + inputs)
         return out
     
         

@@ -15,14 +15,7 @@ class ESTyleLoss():
             pad_token (n_mels,1): The pad token
             device (str): Device name
         """        
-        def define_loss_dict(losses: Munch):
-            
-            _dict = Munch()
-            for name, _ in losses.items():
-                _dict.name = Munch(value = 0.)
-            return _dict
-        self.loss_function: Munch = losses
-        self.loss_value = define_loss_dict(losses)
+
         self.pad_token = pad_token.to(device)
         self.device = device
         
@@ -41,14 +34,14 @@ class ESTyleLoss():
         mask = (tgt != self.pad_token).to(self.device) # obtain a mask from the target reference
         
         # Transformer-Target Loss
-        loss_transf_wout_mask = self.loss_function.smoothl1(src_transformer,tgt)
+        loss_transf_wout_mask = torch.functional.F.mse_loss(src_transformer,tgt, reduction="none")
         loss_transf_masked_w_zero = loss_transf_wout_mask.where(mask, torch.tensor(0.0).to(self.device))
         loss_transf = loss_transf_masked_w_zero.sum() / mask.sum()
         
         # Postnet-Target Loss
-        loss_post = self.loss_function.smoothl1(torch.tensor(0.0),torch.tensor(0.0))
+        loss_post = torch.functional.F.mse_loss(torch.tensor(0.0),torch.tensor(0.0))
         if src_postnet is not None:
-            loss_post_wout_mask = self.loss_function.smoothl1(src_postnet,tgt)
+            loss_post_wout_mask = torch.functional.F.mse_loss(src_postnet, tgt, reduction="none")
             loss_post_masked_w_zero = loss_post_wout_mask.where(mask, torch.tensor(0.0).to(self.device))
             loss_post = loss_post_masked_w_zero.sum() / mask.sum()
         

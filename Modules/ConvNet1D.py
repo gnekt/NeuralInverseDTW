@@ -36,7 +36,7 @@ class ConvNet1D(nn.Module):
         ])
         
         self.norm_layers = nn.ModuleList([
-                nn.BatchNorm1d(output_size, momentum=0.9)
+                nn.BatchNorm1d(output_size)
             for index,(_, output_size,_,_,_,_,_,_)
             in enumerate(model_architecture.layers_configuration)
             ])
@@ -74,10 +74,10 @@ class ConvNet1D(nn.Module):
             if layer_configuration[5] == 'tanh':
                 _activation = torch.tanh(_conv_out) 
                 
-            _input = dropout_l(norm_l(_activation))
-            # if layer_configuration[6] == 'residual':
-            #     _input = dropout_l(norm_l(_activation)) + _input # layer_configuration[3] is PaddingSize in our configuration
-            # else:
-            #     _input = dropout_l(norm_l(_activation))
+            
+            if layer_configuration[6] == 'norm':
+               _input = norm_l(_activation)# layer_configuration[3] is PaddingSize in our configuration
+            else:
+                _input = _activation
         output = _input
         return output.permute(0,2,1)

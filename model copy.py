@@ -184,6 +184,7 @@ class ESTyle(nn.Module):
         postnet_output = decpost_output
         if self.post_net_parameter["activate"]:
             decpost_out_norm = self.decpost_interface_norm(decpost_output)
+            decpost_out_norm = self.decpost_interface_dropout(decpost_out_norm)
             postnet_output = self.postnet(decpost_out_norm)
             if self.post_net_parameter["is_skip"]:
                 postnet_output = self.postnet_dropout(postnet_output)
@@ -193,7 +194,7 @@ class ESTyle(nn.Module):
     
     
     def encode(self, input, mask):
-        encoder_input = self.encoder_positional_embedding(input)
+        encoder_input = self.encoder_positional_embedding(self.encoder_prenet(input))
         
         ###
         encoder_output = self.encoder[0](encoder_input, mask)
@@ -211,7 +212,7 @@ class ESTyle(nn.Module):
         return encoder_output
     
     def decode(self, input, input_padding_mask, memory, memory_mask):
-        decoder_input = self.decoder_positional_embedding(input)
+        decoder_input = self.decoder_positional_embedding(self.decoder_prenet(input))
         
         decoder_output =  self.decoder[0](decoder_input, input_padding_mask, memory, memory_mask)
         if self.decoder_parameter.layers_configuration[0][1] == "residual":

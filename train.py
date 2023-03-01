@@ -77,7 +77,7 @@ def main(config_path, num_worker):
     
     ### Get configuration
     batch_size = config.get('batch_size', 2)
-    device = config.get('device', 'cuda:0')
+    device = config.get('device', 'cuda:1')
     epochs = config.get('epochs', 1000)
     save_freq = config.get('save_freq', 20)
     pretrained_model = Munch(config.get("pretrained_model"))
@@ -98,7 +98,8 @@ def main(config_path, num_worker):
     val_dataloader = build_dataloader(validation_set_path,dataset_configuration,
                                         batch_size=batch_size,
                                         num_workers=num_worker,
-                                        device=device)
+                                        device=device,
+                                        validation=True)
     
     # Module Definition
     model = ESTyle(model_architecture)
@@ -129,14 +130,7 @@ def main(config_path, num_worker):
         
 
     lr = training_parameter.learning_rate
-    noam_factor = training_parameter.warmp_up["noam_factor"]
-    warm_up_step = training_parameter.warmp_up["warm_up_step"]
-    
-    
-    # def noam_schedule(step):
-    #     step+=1
-    #     return noam_factor**(-0.5) * min(step**(-0.5), step * warm_up_step**(-1.5))
-    
+
     losses = Munch(smoothl1=torch.nn.MSELoss(reduction="none"))
     loss = ESTyleLoss(losses, pad_token, device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-6)
@@ -171,16 +165,7 @@ def main(config_path, num_worker):
         optimizer.load_state_dict(checkpoint["optimizer"])
         # scheduler.load_state_dict(checkpoint["scheduler"])
     
-    
-    if pretrained_model.path != "":
-        stage_counter = 1
-        freeze_layer(model, Munch(pretrained_model.layer_freeze_mode[f"stage_{stage_counter}"]))
-        overfitting_alarm = 5
-        overfitting_counter = 0
-        flag_change_stage = False
-    
-    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10, verbose=True, threshold=1e-4, threshold_mode='rel', cooldown=0, min_lr=0, eps=1e-08)
-    
+
     for epoch in range(epoch, epochs+1):
         cumulative_train_loss, transformer_train_loss, postnet_train_loss = 0,0,0
         cumulative_validation_loss, transformer_validation_loss, postnet_validation_loss = 0,0,0
@@ -232,8 +217,7 @@ def main(config_path, num_worker):
         epoch_transformer_validation_loss = transformer_validation_loss/len(val_dataloader)
         epoch_postnet_validation_loss = postnet_validation_loss/len(val_dataloader)
         
-        scheduler.step(epoch_cumulative_validation_loss) # Decide if it is necessary to update the learning rate
-        
+
         # Log writer
         logger.info('--- epoch %d ---' % epoch)
         logger.info("%-15s: %.4f" % ('cumulative_train_loss', epoch_cumulative_train_loss))
@@ -277,7 +261,6 @@ def train_epoch(batch, model: torch.nn.Module, loss: torch.nn.SmoothL1Loss, opti
     transformer_output, postnet_output = model(padded_mel_tensor, padded_ref_mel_input_tensor, mel_padding_mask, ref_mel_input_padding_mask, mel_mask, ref_mel_input_mask)
     cumulative_loss, transformer_loss, postnet_loss = loss.evaluate(transformer_output, postnet_output, padded_ref_mel_target_tensor, mel_lengths, ref_mel_lengths)
     cumulative_loss.backward()
-    torch.nn.utils.clip_grad.clip_grad_norm(model.parameters(),1.)
     optimizer.step()
     # scheduler.step()
     return cumulative_loss.detach().item(), transformer_loss.detach().item(), postnet_loss.detach().item()

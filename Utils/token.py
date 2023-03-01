@@ -5,8 +5,8 @@ config = yaml.safe_load(open("Configs/config.yml"))
 MEL_PARAMS = config.get('preprocess_params', {"n_mel_band":80})
 
 pad_mel_band_value = .0 # <pad> Float
-bos_mel_band_value = .0 # <bos> Float
-eos_mel_band_value = .0 # <eos> Float
+bos_mel_band_value = .5 # <bos> Float
+eos_mel_band_value = .5 # <eos> Float
 
 pad_token = full((1,MEL_PARAMS["spect_params"]["n_mel_band"]),pad_mel_band_value)
 bos_token = full((1,MEL_PARAMS["spect_params"]["n_mel_band"]),bos_mel_band_value)

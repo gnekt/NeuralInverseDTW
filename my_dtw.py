@@ -8,7 +8,6 @@ import soundfile as sf
 import random 
 from pickle import load
 import os
-from model import ESTyle
 import os.path as osp
 import random
 import yaml
@@ -21,7 +20,6 @@ import soundfile as sf
 import random 
 from pickle import load
 import os
-from model import ESTyle
 import os.path as osp
 
 # Do NOT TOUCH
@@ -59,8 +57,9 @@ def load_data(wav_path: str) -> torch.Tensor:
             (MelBand, T_Mel): Mel-Spectrogram of the wav file
         """
         wave_tensor = generate_wav_tensor(wav_path)
-        tensor = to_melspec(wave_tensor).transpose(1,0)
-        scaled_tensor = scaler.transform(torch.log(tensor+1e-5))
+        wave_tensor = (0.1) * wave_tensor
+        tensor  = to_melspec(wave_tensor)
+        scaled_tensor = (torch.log(1e-5 + tensor) - (-4)) / 4
         return torch.FloatTensor(scaled_tensor)
     
 def generate_wav_tensor(wave_path: str) -> torch.Tensor:
@@ -78,9 +77,11 @@ def generate_wav_tensor(wave_path: str) -> torch.Tensor:
     return wave_tensor
 
 def compute_dtw(X, Y):
-    _dtw = dtw(X, Y)
+    _dtw = dtw(X.permute(1,0), Y.permute(1,0))
     
-    return X[_dtw.index1,:], Y[_dtw.index2,:]
+    return X[:, _dtw.index1], Y[:, _dtw.index2]
+
+
 
 def align_spectrograms(X, Y, dtw):
     wp = dtw.path
@@ -91,15 +92,32 @@ def align_spectrograms(X, Y, dtw):
         aligned_Y[x] = Y[y]
     return aligned_X, aligned_Y
 
+def add_noise(mel, noise_level):
+    noise = torch.randn_like(mel) * noise_level
+    noisy_mel = mel + noise
+    return noisy_mel
+
+def frequency_mask(mel, ref_mel, num_masks, mask_width):
+    # Apply frequency masking to the mel spectrogram
+    num_bands, seq_len = mel.shape
+    for _ in range(num_masks):
+        # Randomly select a frequency band to mask
+        center = np.random.randint(low=mask_width, high=num_bands - mask_width)
+        lower = max(center - mask_width // 2, 0)
+        upper = min(center + mask_width // 2, num_bands - 1)
+        mel[lower:upper, :] = 0.0
+        ref_mel[lower:upper, :] = 0.0
+    return mel, ref_mel
+
 if __name__ == '__main__':
-    x_data = load_data("0012_000072.wav")
-    y_data = load_data("0012_000772.wav")
-    x, y = compute_dtw(x_data, y_data)
+    x_data = load_data("..//StarGANv2-EmotionalVC/dataset/eng/ESD/0014/Neutral/0014_000015.wav")
+    y_data = load_data("../StarGANv2-EmotionalVC/dataset/eng/ESD/0014/Happy/0014_000715.wav")
+    # x, y = compute_dtw(x_data, y_data)
     # out = load(open("Fruits.pkl", "rb"))
-    x = (scaler.inverse_transform(x.cpu().detach().numpy()) - -4 )/4
-    y = (scaler.inverse_transform(y.cpu().detach().numpy()) - -4 )/4
-    
+    # x, y = frequency_mask(x,y,4,3)
     # load vocoder
+    x = add_noise(x_data, 0.3)
+    y = add_noise(y_data, 0.3)
     print("Load vocoder model..")
     from parallel_wavegan.utils import load_model
     vocoder = load_model("Vocoder/PreTrainedVocoder/checkpoint-400000steps.pkl").to("cpu").eval()
@@ -108,14 +126,12 @@ if __name__ == '__main__':
 
 
     with torch.no_grad():
-            c = torch.FloatTensor(x)
-            x = vocoder.inference(c)
+            x = vocoder.inference(x.permute(1,0).cpu().detach().numpy())
             x = x.view(-1).cpu()
             
-            c = torch.FloatTensor(y)
-            y = vocoder.inference(c)
+            y = vocoder.inference(y.permute(1,0).cpu().detach().numpy())
             y = y.view(-1).cpu()
                 
     print("storing sample..")
-    sf.write(f'neutral.wav', x, 24000)
-    sf.write(f'happy.wav', y, 24000)
+    sf.write(f'orf_neutral.wav', x, 24000)
+    sf.write(f'orf_happy.wav', y, 24000)
