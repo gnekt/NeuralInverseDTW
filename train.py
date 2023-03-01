@@ -17,45 +17,15 @@ from model import ESTyle
 from Utils.token import pad_token
 import logging
 from logging import StreamHandler
-from torch.optim.lr_scheduler import LambdaLR
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from Modules.Discriminator import Discriminator
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 handler = StreamHandler()
 handler.setLevel(logging.DEBUG)
 logger.addHandler(handler)
+torch.autograd.set_detect_anomaly(True)
 
-torch.backends.cudnn.benchmark = True #
-
-def freeze_layer(model, configuration, mode = False):
-    # What i need to freeze? Let's see
-    # Encoder Prenet
-    for param in model.encoder_prenet.parameters():
-        param.requires_grad = mode
-        
-    # Encoder
-    for index, layer in enumerate(model.encoder):
-        if index > configuration.encoder:
-            break
-        for param in layer.parameters():
-            param.requires_grad = mode
-    
-    # Decoder Prenet
-    if configuration.decoder_prenet > 0:     
-        for param in model.decoder_prenet.parameters():
-            param.requires_grad = mode
-            
-    # Decoder
-    for index, layer in enumerate(model.decoder):
-        if index > configuration.decoder:
-            break
-        for param in layer.parameters():
-            param.requires_grad = mode
-            
-    if configuration.decpost_interface > 0:
-        for param in model.decpost_interface.parameters():
-            param.requires_grad = mode
 
 @click.command()
 @click.option('-p', '--config_path', default='Configs/config.yml', type=str)
@@ -102,148 +72,111 @@ def main(config_path, num_worker):
                                         validation=True)
     
     # Module Definition
-    model = ESTyle(model_architecture)
-    model.to(device)
+    generator = ESTyle(model_architecture)
+    generator.to(device)
     
-    # Load an eventual pretrained encoder
-    if pretrained_model.path != "":
-        if not os.path.exists(pretrained_model.path):
-            raise FileNotFoundError(f"Pretrained Encoder Path not found! got: {pretrained_model.path}")
-        checkpoint = torch.load(pretrained_model.path, map_location=device)
-        if model.encoder_prenet is not None:
-            model.encoder_prenet.load_state_dict(checkpoint["encoder_prenet"])
-        if model.decoder_prenet is not None:
-            model.decoder_prenet.load_state_dict(checkpoint["decoder_prenet"])
-        if model.encoder is not None:
-            model.encoder.load_state_dict(checkpoint["encoder"])
-        if model.encoder_norm is not None:
-            model.encoder_norm.load_state_dict(checkpoint["encoder_norm"])
-        if model.decoder is not None:
-            model.decoder.load_state_dict(checkpoint["decoder"])
-        if model.decoder_norm is not None:
-            model.decoder_norm.load_state_dict(checkpoint["decoder_norm"])
-        if model.decpost_interface is not None:
-            model.decpost_interface.load_state_dict(checkpoint["decpost_interface"])
-        # if model.decpost_interface_norm is not None:
-        #     model.decpost_interface_norm.load_state_dict(checkpoint["decpost_interface_norm"])
-       
-        
-
+    discriminator = Discriminator()
+    discriminator.to(device)
+    
     lr = training_parameter.learning_rate
-
-    losses = Munch(smoothl1=torch.nn.MSELoss(reduction="none"))
-    loss = ESTyleLoss(losses, pad_token, device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-6)
+    
+    gen_optimizer = torch.optim.Adam(generator.parameters(), lr=lr, weight_decay=1e-4)
+    dis_optimizer = torch.optim.Adam(generator.parameters(), lr=lr, weight_decay=1e-6)
     best_val_loss = float('+inf')
     epoch = 0
     
     # Load checkpoint, if exists
     if os.path.exists(osp.join(log_dir, 'estyle_backup.pth')):
         checkpoint = torch.load(osp.join(log_dir, 'estyle_backup.pth'), map_location=device) # Fix from https://github.com/pytorch/pytorch/issues/2830#issuecomment-718816292
-        if model.encoder_prenet is not None:
-            model.encoder_prenet.load_state_dict(checkpoint["encoder_prenet"])
-        if model.decoder_prenet is not None:
-            model.decoder_prenet.load_state_dict(checkpoint["decoder_prenet"])
-        if model.encoder is not None:
-            model.encoder.load_state_dict(checkpoint["encoder"])
-        if model.encoder_norm is not None:
-            model.encoder_norm.load_state_dict(checkpoint["encoder_norm"])
-        if model.decoder is not None:
-            model.decoder.load_state_dict(checkpoint["decoder"])
-        if model.decoder_norm is not None:
-            model.decoder_norm.load_state_dict(checkpoint["decoder_norm"])
-        if model.decpost_interface is not None:
-            model.decpost_interface.load_state_dict(checkpoint["decpost_interface"])
-        if model.decpost_interface_norm is not None:
-            model.decpost_interface_norm.load_state_dict(checkpoint["decpost_interface_norm"])
-        if model.postnet is not None:
-            model.postnet.load_state_dict(checkpoint["postnet"])
-        if model.postnet_norm is not None:
-            model.postnet_norm.load_state_dict(checkpoint["postnet_norm"])
+        if generator.encoder_prenet is not None:
+            generator.encoder_prenet.load_state_dict(checkpoint["encoder_prenet"])
+        if generator.decoder_prenet is not None:
+            generator.decoder_prenet.load_state_dict(checkpoint["decoder_prenet"])
+        if generator.encoder is not None:
+            generator.encoder.load_state_dict(checkpoint["encoder"])
+        if generator.encoder_norm is not None:
+            generator.encoder_norm.load_state_dict(checkpoint["encoder_norm"])
+        if generator.decoder is not None:
+            generator.decoder.load_state_dict(checkpoint["decoder"])
+        if generator.decoder_norm is not None:
+            generator.decoder_norm.load_state_dict(checkpoint["decoder_norm"])
+        if generator.decpost_interface is not None:
+            generator.decpost_interface.load_state_dict(checkpoint["decpost_interface"])
+        if generator.decpost_interface_norm is not None:
+            generator.decpost_interface_norm.load_state_dict(checkpoint["decpost_interface_norm"])
+        if generator.postnet is not None:
+            generator.postnet.load_state_dict(checkpoint["postnet"])
+        if generator.postnet_norm is not None:
+            generator.postnet_norm.load_state_dict(checkpoint["postnet_norm"])
         best_val_loss = checkpoint["loss"]
         epoch = checkpoint["reached_epoch"]
         optimizer.load_state_dict(checkpoint["optimizer"])
-        # scheduler.load_state_dict(checkpoint["scheduler"])
     
 
     for epoch in range(epoch, epochs+1):
-        cumulative_train_loss, transformer_train_loss, postnet_train_loss = 0,0,0
-        cumulative_validation_loss, transformer_validation_loss, postnet_validation_loss = 0,0,0
-        if pretrained_model.path != "":
-            logger.info("%-15s" % ("Check stage update.."))
-            if overfitting_counter > overfitting_alarm:
-                logger.info("%-15s" % ("Alarm raised, start stage change"))
-                flag_change_stage = ~flag_change_stage
-            logger.info(f"Ok.")
-        
-        if pretrained_model.path != "":
-            # Check if we need stage change
-            if flag_change_stage: 
-                logger.info(f"De-freeze from stage {stage_counter}")
-                # De-Freeze all for security
-                freeze_layer(model, Munch(pretrained_model.layer_freeze_mode[f"stage_{stage_counter}"]), mode=True)
-                stage_counter += 1
-                
-                logger.info(f"Freeze in stage {stage_counter}")
-                # Freeze in new stage
-                freeze_layer(model, Munch(pretrained_model.layer_freeze_mode[f"stage_{stage_counter}"]))
-                flag_change_stage = ~flag_change_stage
-                overfitting_counter = 0
-                logger.info(f"Done.")
+        adv_train_loss, adv_validation_loss = 0,0
+        features_matching_training_loss, features_matching_validation_loss =  0,0
+        mse_training_loss, mse_validation_loss = 0,0
         
         # Train
         for _, batch in enumerate(tqdm(train_dataloader, desc="[train]"), 1):
             batch = [b.to(device) for b in batch]
-            _cumulative_train_loss, _transformer_train_loss, _postnet_train_loss = train_epoch(batch, model, loss, optimizer)
-            cumulative_train_loss += _cumulative_train_loss
-            transformer_train_loss += _transformer_train_loss
-            if is_postnet_active:
-                postnet_train_loss += _postnet_train_loss
+            losses = train_epoch(batch, generator, discriminator, gen_optimizer, dis_optimizer, device)
+            adv_train_loss += losses["adv_loss"]
+            features_matching_training_loss += losses["features_matching_loss"]
+            mse_training_loss += losses["mse_loss"]
             
         # Validation    
         for _, batch in enumerate(tqdm(val_dataloader, desc="[validation]"), 1):
             batch = [b.to(device) for b in batch]
-            _cumulative_validation_loss, _transformer_validation_loss, _postnet_validation_loss = eval_epoch(batch, model, loss)
-            cumulative_validation_loss += _cumulative_validation_loss
-            transformer_validation_loss += _transformer_validation_loss
-            if is_postnet_active:
-                postnet_validation_loss += _postnet_validation_loss
+            losses = eval_epoch(batch, generator, discriminator, gen_optimizer, dis_optimizer, device)
+            adv_validation_loss += losses["adv_loss"]
+            features_matching_validation_loss += losses["features_matching_loss"]
+            mse_validation_loss += losses["mse_loss"]
             
-        epoch_cumulative_train_loss = cumulative_train_loss/len(train_dataloader)
-        epoch_transformer_train_loss = transformer_train_loss/len(train_dataloader)
-        epoch_postnet_train_loss = postnet_train_loss/len(train_dataloader)
-            
-        epoch_cumulative_validation_loss = cumulative_validation_loss/len(val_dataloader)
-        epoch_transformer_validation_loss = transformer_validation_loss/len(val_dataloader)
-        epoch_postnet_validation_loss = postnet_validation_loss/len(val_dataloader)
+        # Training epoch loss
+        epoch_adv_training_loss = adv_train_loss/len(train_dataloader)
+        epoch_features_matching_training_loss = features_matching_training_loss/len(train_dataloader)
+        epoch_mse_training_loss = mse_training_loss/len(train_dataloader)
+        
+        
+        # Validation epoch loss
+        epoch_adv_validation_loss = adv_validation_loss/len(val_dataloader)
+        epoch_features_matching_validation_loss = features_matching_validation_loss/len(val_dataloader)
+        epoch_mse_validation_loss = mse_validation_loss/len(val_dataloader)
         
 
         # Log writer
         logger.info('--- epoch %d ---' % epoch)
-        logger.info("%-15s: %.4f" % ('cumulative_train_loss', epoch_cumulative_train_loss))
-        logger.info("%-15s: %.4f" % ('transformer_train_loss', epoch_transformer_train_loss))
-        logger.info("%-15s: %.4f" % ('postnet_train_loss', epoch_postnet_train_loss))
+        logger.info("%-15s: %.4f" % ('epoch_adv_training_loss', epoch_adv_training_loss))
+        logger.info("%-15s: %.4f" % ('epoch_features_matching_training_loss', epoch_features_matching_training_loss))
+        logger.info("%-15s: %.4f" % ('epoch_mse_training_loss', epoch_mse_training_loss))
         logger.info("")
-        logger.info("%-15s: %.4f" % ('cumulative_validation_loss', epoch_cumulative_validation_loss))
-        logger.info("%-15s: %.4f" % ('transformer_validation_loss', epoch_transformer_validation_loss))
-        logger.info("%-15s: %.4f" % ('postnet_validation_loss', epoch_postnet_validation_loss))
-            
+        logger.info("%-15s: %.4f" % ('epoch_adv_validation_loss', epoch_adv_validation_loss))
+        logger.info("%-15s: %.4f" % ('epoch_features_matching_validation_loss', epoch_features_matching_validation_loss))
+        logger.info("%-15s: %.4f" % ('epoch_mse_validation_loss', epoch_mse_validation_loss))
         
-        if pretrained_model.path != "":
-            if epoch_cumulative_validation_loss > best_val_loss:
-                overfitting_counter += 1
+        # Generate tensorboard logs for the epoch 
+        writer.add_scalar('epoch_adv_training_loss', epoch_adv_training_loss, epoch) 
+        writer.add_scalar('epoch_features_matching_training_loss', epoch_features_matching_training_loss, epoch) 
+        writer.add_scalar('epoch_mse_training_loss', epoch_mse_training_loss, epoch) 
         
+        writer.add_scalar('epoch_adv_validation_loss', epoch_adv_validation_loss, epoch) 
+        writer.add_scalar('epoch_features_matching_validation_loss', epoch_features_matching_validation_loss, epoch) 
+        writer.add_scalar('epoch_mse_validation_loss', epoch_mse_validation_loss, epoch) 
+        
+        epoch_cumulative_validation_loss = epoch_adv_validation_loss + epoch_features_matching_validation_loss + epoch_mse_validation_loss
+
         # Saving point
         if epoch_cumulative_validation_loss < best_val_loss:
-           overfitting_counter = 0
-           save_checkpoint(osp.join(log_dir, 'estyle_best.pth'), model, optimizer, epoch, epoch_cumulative_validation_loss) 
+           save_checkpoint(osp.join(log_dir, 'estyle_best.pth'), generator, discriminator, gen_optimizer, dis_optimizer, epoch, epoch_cumulative_validation_loss) 
            best_val_loss = epoch_cumulative_validation_loss
            print("Best found! Save!")
         if (epoch % save_freq) == 0:
-            save_checkpoint(osp.join(log_dir, 'estyle_backup.pth'), model, optimizer, epoch, epoch_cumulative_validation_loss)
+            save_checkpoint(osp.join(log_dir, 'estyle_backup.pth'), generator, discriminator, gen_optimizer, dis_optimizer, epoch, epoch_cumulative_validation_loss)
         
         
-def train_epoch(batch, model: torch.nn.Module, loss: torch.nn.SmoothL1Loss, optimizer: torch.optim.Optimizer) -> float:
+def train_epoch(batch, generator: torch.nn.Module, discriminator, gen_optimizer: torch.optim.Optimizer, dis_optimizer: torch.optim.Optimizer, device) -> float:
     """Function that perform a training step on the given batch
 
     Args:
@@ -255,17 +188,63 @@ def train_epoch(batch, model: torch.nn.Module, loss: torch.nn.SmoothL1Loss, opti
     Returns:
         float: Loss value
     """    
-    model.train()
-    optimizer.zero_grad()
+    adv_loss = torch.nn.BCELoss()
+    mse_loss = torch.nn.MSELoss(reduction="none")
+    generator.train()
+    discriminator.train()
+    
     mel_lengths, ref_mel_lengths, padded_mel_tensor, padded_ref_mel_input_tensor, padded_ref_mel_target_tensor, mel_mask, ref_mel_input_mask, mel_padding_mask, ref_mel_input_padding_mask = batch
-    transformer_output, postnet_output = model(padded_mel_tensor, padded_ref_mel_input_tensor, mel_padding_mask, ref_mel_input_padding_mask, mel_mask, ref_mel_input_mask)
-    cumulative_loss, transformer_loss, postnet_loss = loss.evaluate(transformer_output, postnet_output, padded_ref_mel_target_tensor, mel_lengths, ref_mel_lengths)
+    trues = torch.ones((5,1)).to(device)
+    falses = torch.zeros((5,1)).to(device)
+    
+    # Output
+    fake_gen_out = generator(padded_mel_tensor, padded_ref_mel_input_tensor, mel_padding_mask, ref_mel_input_padding_mask, mel_mask, ref_mel_input_mask)
+    reshaped_padded_ref_mel_target_tensor = padded_ref_mel_target_tensor.clone()
+    reshaped_fake_gen_out = fake_gen_out.clone()
+    
+    # Discriminator training
+    dis_optimizer.zero_grad()
+    
+    real_dis_out = discriminator(reshaped_padded_ref_mel_target_tensor.unsqueeze(1).permute(0,1,3,2))
+    real_dis_loss = adv_loss(real_dis_out, trues)
+    
+    fake_gen_dis_out = discriminator(reshaped_fake_gen_out.detach().unsqueeze(1).permute(0,1,3,2))
+    fake_gen_dis_out = adv_loss(fake_gen_dis_out, falses)
+    
+    dis_loss = real_dis_loss + fake_gen_dis_out
+    dis_loss.backward()
+    dis_optimizer.step()
+    
+    
+    
+    mask = (padded_ref_mel_target_tensor != pad_token.to(device)).to(device) # obtain a mask from the target reference
+    # Generator training
+    gen_optimizer.zero_grad()
+    
+    # ADV Loss
+    fake_gen_dis_out = discriminator(reshaped_fake_gen_out.unsqueeze(1).permute(0,1,3,2))
+    fake_gen_adv_loss = adv_loss(fake_gen_dis_out, trues)
+    
+    # MSE Loss        
+        # Postnet-Target Loss
+    fake_gen_mse_loss_wout_mask = mse_loss(fake_gen_out, padded_ref_mel_target_tensor)
+    fake_gen_mse_loss_w_mask = fake_gen_mse_loss_wout_mask.where(mask, torch.tensor(0.0).to(device))
+    fake_gen_mse_loss = fake_gen_mse_loss_w_mask.sum() / mask.sum()
+    
+    # # Features Matching Loss
+    # fake_gen_features_matching_loss = torch.functional.F.mse_loss(discriminator.get_features(fake_gen_out.unsqueeze(1).transpose(3,2)), discriminator.get_features(padded_ref_mel_target_tensor.unsqueeze(1).transpose(3,2)))
+    
+    cumulative_loss = fake_gen_adv_loss + fake_gen_mse_loss 
     cumulative_loss.backward()
-    optimizer.step()
-    # scheduler.step()
-    return cumulative_loss.detach().item(), transformer_loss.detach().item(), postnet_loss.detach().item()
+    gen_optimizer.step()
+    
+    return {
+        "adv_loss": fake_gen_adv_loss.detach().item(),
+        "mse_loss": fake_gen_mse_loss.detach().item(),
+        "features_matching_loss": 0
+    }
 
-def eval_epoch(batch, model: torch.nn.Module, loss: torch.nn) -> float:
+def eval_epoch(batch, generator: torch.nn.Module, discriminator, gen_optimizer: torch.optim.Optimizer, dis_optimizer: torch.optim.Optimizer, device) -> float:
     """Function that perform an evaluation step on the given batch 
 
     Args:
@@ -276,14 +255,47 @@ def eval_epoch(batch, model: torch.nn.Module, loss: torch.nn) -> float:
     Returns:
         float: Loss value
     """    
-    model.eval()
+    generator.eval()
+    discriminator.eval()
+    adv_loss = torch.nn.BCELoss()
+    trues = torch.ones((padded_ref_mel_target_tensor.shape[0],1)).to(device)
+    falses = torch.zeros((padded_ref_mel_target_tensor.shape[0],1)).to(device)
+    mel_lengths, ref_mel_lengths, padded_mel_tensor, padded_ref_mel_input_tensor, padded_ref_mel_target_tensor, mel_mask, ref_mel_input_mask, mel_padding_mask, ref_mel_input_padding_mask = batch
+    
     with torch.no_grad():
-        mel_lengths, ref_mel_lengths, padded_mel_tensor, padded_ref_mel_input_tensor, padded_ref_mel_target_tensor, mel_mask, ref_mel_input_mask, mel_padding_mask, ref_mel_input_padding_mask = batch
-        transformer_output, postnet_output  = model(padded_mel_tensor, padded_ref_mel_input_tensor, mel_padding_mask, ref_mel_input_padding_mask, mel_mask, ref_mel_input_mask)
-        cumulative_loss, transformer_loss, postnet_loss = loss.evaluate(transformer_output, postnet_output, padded_ref_mel_target_tensor, mel_lengths, ref_mel_lengths)
-    return cumulative_loss.detach().item(), transformer_loss.detach().item(), postnet_loss.detach().item()
+        fake_transformer_gen_out, fake_postnet_gen_out = generator(padded_mel_tensor, padded_ref_mel_input_tensor, mel_padding_mask, ref_mel_input_padding_mask, mel_mask, ref_mel_input_mask)
+        
+        mask = (padded_ref_mel_target_tensor != pad_token.to(device)).to(device) # obtain a mask from the target reference
+        
+        fake_transformer_dis_out = discriminator(fake_transformer_gen_out.unsqueeze(1).transpose(3,2))
+        fake_postnet_dis_out = discriminator(fake_postnet_gen_out.unsqueeze(1).transpose(3,2))
+        
+        # ADV Loss
+        fake_transformer_adv_loss = adv_loss(fake_transformer_dis_out, trues)
+        fake_postnet_adv_loss = adv_loss(fake_postnet_dis_out, trues)
+        
+        # MSE Loss        
+            # Transformer-Target Loss
+        fake_transformer_mse_loss_wout_mask = torch.functional.F.mse_loss(fake_transformer_gen_out, padded_ref_mel_target_tensor, reduction="none")
+        fake_transformer_mse_loss_w_mask = fake_transformer_mse_loss_wout_mask.where(mask, torch.tensor(0.0).to(device))
+        fake_transformer_mse_loss = fake_transformer_mse_loss_w_mask.sum() / mask.sum()
+        
+            # Postnet-Target Loss
+        fake_postnet_mse_loss_wout_mask = torch.functional.F.mse_loss(fake_postnet_gen_out, padded_ref_mel_target_tensor, reduction="none")
+        fake_postnet_mse_loss_w_mask = fake_postnet_mse_loss_wout_mask.where(mask, torch.tensor(0.0).to(device))
+        fake_postnet_mse_loss = fake_postnet_mse_loss_w_mask.sum() / mask.sum()
+        
+        # Features Matching Loss
+        fake_transformer_features_matching_loss = torch.functional.F.mse_loss(discriminator.get_features(fake_transformer_gen_out.unsqueeze(1).transpose(3,2)), discriminator.get_features(padded_ref_mel_target_tensor.unsqueeze(1).transpose(3,2)))
+        fake_postnet_features_matching_loss = torch.functional.F.mse_loss(discriminator.get_features(fake_postnet_gen_out.unsqueeze(1).transpose(3,2)), discriminator.get_features(padded_ref_mel_target_tensor.unsqueeze(1).transpose(3,2)))
+    
+    return {
+        "adv_loss": (fake_transformer_adv_loss + fake_postnet_adv_loss).item(),
+        "mse_loss": (fake_postnet_mse_loss + fake_transformer_mse_loss).item(),
+        "features_matching_loss": (fake_postnet_features_matching_loss + fake_transformer_features_matching_loss).item()
+    }
 
-def save_checkpoint(checkpoint_path: str, model: ESTyle, optimizer: torch.optim.Optimizer, epoch: int, actual_loss: float):
+def save_checkpoint(checkpoint_path: str, generator: ESTyle, discriminator, gen_optimizer: torch.optim.Optimizer, dis_optimizer: torch.optim.Optimizer, epoch: int, actual_loss: float):
     """
         Save checkpoint.
         
@@ -296,19 +308,21 @@ def save_checkpoint(checkpoint_path: str, model: ESTyle, optimizer: torch.optim.
             global_step (int): Step counter 
     """
     state_dict = {
-        "optimizer": optimizer.state_dict(),
+        "gen_optimizer": gen_optimizer.state_dict(),
+        "dis_optimizer": dis_optimizer.state_dict(),
         "reached_epoch": epoch,
         "loss": actual_loss,
-        "encoder_prenet": model.encoder_prenet.state_dict() if model.encoder_prenet is not None else None,
-        "decoder_prenet": model.decoder_prenet.state_dict() if model.decoder_prenet is not None else None,
-        "encoder": model.encoder.state_dict() if model.encoder is not None else None,
-        "encoder_norm": model.encoder_norm.state_dict() if model.encoder_norm is not None else None,
-        "decoder": model.decoder.state_dict() if model.decoder is not None else None,
-        "decoder_norm": model.decoder_norm.state_dict() if model.decoder_norm is not None else None,
-        "decpost_interface": model.decpost_interface.state_dict() if model.decpost_interface is not None else None,
-        "decpost_interface_norm": model.decpost_interface_norm.state_dict() if model.decpost_interface_norm is not None else None,
-        "postnet": model.postnet.state_dict() if model.postnet is not None else None,
-        "postnet_norm": model.postnet_norm.state_dict() if model.postnet_norm is not None else None
+        "encoder_prenet": generator.encoder_prenet.state_dict() if generator.encoder_prenet is not None else None,
+        "decoder_prenet": generator.decoder_prenet.state_dict() if generator.decoder_prenet is not None else None,
+        "encoder": generator.encoder.state_dict() if generator.encoder is not None else None,
+        "encoder_norm": generator.encoder_norm.state_dict() if generator.encoder_norm is not None else None,
+        "decoder": generator.decoder.state_dict() if generator.decoder is not None else None,
+        "decoder_norm": generator.decoder_norm.state_dict() if generator.decoder_norm is not None else None,
+        "decpost_interface": generator.decpost_interface.state_dict() if generator.decpost_interface is not None else None,
+        "decpost_interface_norm": generator.decpost_interface_norm.state_dict() if generator.decpost_interface_norm is not None else None,
+        "postnet": generator.postnet.state_dict() if generator.postnet is not None else None,
+        "postnet_norm": generator.postnet_norm.state_dict() if generator.postnet_norm is not None else None,
+        "discriminator": discriminator.state_dict()
     }
     
     if not os.path.exists(os.path.dirname(checkpoint_path)):

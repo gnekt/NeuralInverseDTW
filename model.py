@@ -189,7 +189,7 @@ class ESTyle(nn.Module):
                 postnet_output = self.postnet_dropout(postnet_output)
                 postnet_output = postnet_output + decpost_out_norm
             
-        return decpost_output, postnet_output if self.post_net_parameter["activate"] else None
+        return postnet_output
     
     
     def encode(self, input, mask):
