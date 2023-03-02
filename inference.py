@@ -126,4 +126,4 @@ with torch.no_grad():
         y_out = y_out.view(-1).cpu()
             
 print("storing sample..")
-sf.write(f'ex_6_happy_b.wav', y_out, 24000)
+sf.write(f'dw_ex_6_happy_b.wav', y_out, 24000)

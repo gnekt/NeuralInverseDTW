@@ -34,8 +34,9 @@ validation_path = config.get('validation_path', "Data/happy_validation_list_aug.
 
 # Define stream 
 emotion_path = "dataset/happy_conversion.txt"
-dataframe = pd.read_csv("dataset/dataset_aug.csv", sep=";")
+dataframe = pd.read_csv("dataset/dataset.csv", sep=";")
 happy_dataframe = dataframe[(dataframe["emotion"] == "happy") | (dataframe["emotion"] == "neutral")].sample(frac=1)
+happy_dataframe = dataframe[dataframe["lang"] == "eng"]
 happy_dataframe = happy_dataframe.fillna("")
 happy_dataframe['actor_id'] = happy_dataframe['actor_id'].astype(str)
 # pick sample for training and validation

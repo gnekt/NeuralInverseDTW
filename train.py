@@ -6,18 +6,19 @@ import torch
 import click
 import warnings
 
-from loss import ESTyleLoss
+from loss import PerceptualLoss
+from model import ESTyle
 warnings.simplefilter('ignore')
 
 from munch import Munch
 from tqdm import tqdm
 from dataset import build_dataloader
 from torch.utils.tensorboard import SummaryWriter
-from model import ESTyle
+
 from Utils.token import pad_token
 import logging
 from logging import StreamHandler
-from Modules.Discriminator import Discriminator
+from Modules.Discriminator import GlobalFeaturesDiscriminator as Discriminator
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -80,8 +81,9 @@ def main(config_path, num_worker):
     
     lr = training_parameter.learning_rate
     
-    gen_optimizer = torch.optim.Adam(generator.parameters(), lr=lr, weight_decay=1e-4)
-    dis_optimizer = torch.optim.Adam(generator.parameters(), lr=lr, weight_decay=1e-6)
+    perceptual_loss = PerceptualLoss(device)
+    gen_optimizer = torch.optim.AdamW(generator.parameters(), lr=lr, weight_decay=1e-4)
+    dis_optimizer = torch.optim.AdamW(discriminator.parameters(), lr=0.00001, weight_decay=1e-4)
     best_val_loss = float('+inf')
     epoch = 0
     
@@ -115,57 +117,57 @@ def main(config_path, num_worker):
 
     for epoch in range(epoch, epochs+1):
         adv_train_loss, adv_validation_loss = 0,0
-        features_matching_training_loss, features_matching_validation_loss =  0,0
+        perceptual_training_loss, perceptual_validation_loss =  0,0
         mse_training_loss, mse_validation_loss = 0,0
         
         # Train
         for _, batch in enumerate(tqdm(train_dataloader, desc="[train]"), 1):
             batch = [b.to(device) for b in batch]
-            losses = train_epoch(batch, generator, discriminator, gen_optimizer, dis_optimizer, device)
+            losses = train_epoch(batch, generator, discriminator, perceptual_loss, gen_optimizer, dis_optimizer, device)
             adv_train_loss += losses["adv_loss"]
-            features_matching_training_loss += losses["features_matching_loss"]
+            perceptual_training_loss += losses["perceptual_loss"]
             mse_training_loss += losses["mse_loss"]
             
         # Validation    
         for _, batch in enumerate(tqdm(val_dataloader, desc="[validation]"), 1):
             batch = [b.to(device) for b in batch]
-            losses = eval_epoch(batch, generator, discriminator, gen_optimizer, dis_optimizer, device)
+            losses = eval_epoch(batch, generator, discriminator, perceptual_loss, device)
             adv_validation_loss += losses["adv_loss"]
-            features_matching_validation_loss += losses["features_matching_loss"]
+            perceptual_validation_loss += losses["perceptual_loss"]
             mse_validation_loss += losses["mse_loss"]
             
         # Training epoch loss
         epoch_adv_training_loss = adv_train_loss/len(train_dataloader)
-        epoch_features_matching_training_loss = features_matching_training_loss/len(train_dataloader)
+        epoch_perceptual_training_loss = perceptual_training_loss/len(train_dataloader)
         epoch_mse_training_loss = mse_training_loss/len(train_dataloader)
         
         
         # Validation epoch loss
         epoch_adv_validation_loss = adv_validation_loss/len(val_dataloader)
-        epoch_features_matching_validation_loss = features_matching_validation_loss/len(val_dataloader)
+        epoch_perceptual_validation_loss = perceptual_validation_loss/len(val_dataloader)
         epoch_mse_validation_loss = mse_validation_loss/len(val_dataloader)
         
 
         # Log writer
         logger.info('--- epoch %d ---' % epoch)
         logger.info("%-15s: %.4f" % ('epoch_adv_training_loss', epoch_adv_training_loss))
-        logger.info("%-15s: %.4f" % ('epoch_features_matching_training_loss', epoch_features_matching_training_loss))
+        logger.info("%-15s: %.4f" % ('epoch_perceptual_training_loss', epoch_perceptual_training_loss))
         logger.info("%-15s: %.4f" % ('epoch_mse_training_loss', epoch_mse_training_loss))
         logger.info("")
         logger.info("%-15s: %.4f" % ('epoch_adv_validation_loss', epoch_adv_validation_loss))
-        logger.info("%-15s: %.4f" % ('epoch_features_matching_validation_loss', epoch_features_matching_validation_loss))
+        logger.info("%-15s: %.4f" % ('epoch_perceptual_validation_loss', epoch_perceptual_validation_loss))
         logger.info("%-15s: %.4f" % ('epoch_mse_validation_loss', epoch_mse_validation_loss))
         
         # Generate tensorboard logs for the epoch 
         writer.add_scalar('epoch_adv_training_loss', epoch_adv_training_loss, epoch) 
-        writer.add_scalar('epoch_features_matching_training_loss', epoch_features_matching_training_loss, epoch) 
+        writer.add_scalar('epoch_perceptual_training_loss', epoch_perceptual_training_loss, epoch) 
         writer.add_scalar('epoch_mse_training_loss', epoch_mse_training_loss, epoch) 
         
         writer.add_scalar('epoch_adv_validation_loss', epoch_adv_validation_loss, epoch) 
-        writer.add_scalar('epoch_features_matching_validation_loss', epoch_features_matching_validation_loss, epoch) 
+        writer.add_scalar('epoch_perceptual_validation_loss', epoch_perceptual_validation_loss, epoch) 
         writer.add_scalar('epoch_mse_validation_loss', epoch_mse_validation_loss, epoch) 
         
-        epoch_cumulative_validation_loss = epoch_adv_validation_loss + epoch_features_matching_validation_loss + epoch_mse_validation_loss
+        epoch_cumulative_validation_loss = epoch_adv_validation_loss + epoch_perceptual_validation_loss + epoch_mse_validation_loss
 
         # Saving point
         if epoch_cumulative_validation_loss < best_val_loss:
@@ -176,7 +178,7 @@ def main(config_path, num_worker):
             save_checkpoint(osp.join(log_dir, 'estyle_backup.pth'), generator, discriminator, gen_optimizer, dis_optimizer, epoch, epoch_cumulative_validation_loss)
         
         
-def train_epoch(batch, generator: torch.nn.Module, discriminator, gen_optimizer: torch.optim.Optimizer, dis_optimizer: torch.optim.Optimizer, device) -> float:
+def train_epoch(batch, generator: torch.nn.Module, discriminator, perceptual_loss, gen_optimizer: torch.optim.Optimizer, dis_optimizer: torch.optim.Optimizer, device) -> float:
     """Function that perform a training step on the given batch
 
     Args:
@@ -199,16 +201,14 @@ def train_epoch(batch, generator: torch.nn.Module, discriminator, gen_optimizer:
     
     # Output
     fake_gen_out = generator(padded_mel_tensor, padded_ref_mel_input_tensor, mel_padding_mask, ref_mel_input_padding_mask, mel_mask, ref_mel_input_mask)
-    reshaped_padded_ref_mel_target_tensor = padded_ref_mel_target_tensor.clone()
-    reshaped_fake_gen_out = fake_gen_out.clone()
     
     # Discriminator training
     dis_optimizer.zero_grad()
     
-    real_dis_out = discriminator(reshaped_padded_ref_mel_target_tensor.unsqueeze(1).permute(0,1,3,2))
+    real_dis_out = discriminator(padded_ref_mel_target_tensor.unsqueeze(1).permute(0,1,3,2))
     real_dis_loss = adv_loss(real_dis_out, trues)
     
-    fake_gen_dis_out = discriminator(reshaped_fake_gen_out.detach().unsqueeze(1).permute(0,1,3,2))
+    fake_gen_dis_out = discriminator(fake_gen_out.detach().unsqueeze(1).permute(0,1,3,2))
     fake_gen_dis_out = adv_loss(fake_gen_dis_out, falses)
     
     dis_loss = real_dis_loss + fake_gen_dis_out
@@ -216,13 +216,12 @@ def train_epoch(batch, generator: torch.nn.Module, discriminator, gen_optimizer:
     dis_optimizer.step()
     
     
-    
     mask = (padded_ref_mel_target_tensor != pad_token.to(device)).to(device) # obtain a mask from the target reference
     # Generator training
     gen_optimizer.zero_grad()
     
     # ADV Loss
-    fake_gen_dis_out = discriminator(reshaped_fake_gen_out.unsqueeze(1).permute(0,1,3,2))
+    fake_gen_dis_out = discriminator(fake_gen_out.unsqueeze(1).permute(0,1,3,2))
     fake_gen_adv_loss = adv_loss(fake_gen_dis_out, trues)
     
     # MSE Loss        
@@ -234,6 +233,9 @@ def train_epoch(batch, generator: torch.nn.Module, discriminator, gen_optimizer:
     # # Features Matching Loss
     # fake_gen_features_matching_loss = torch.functional.F.mse_loss(discriminator.get_features(fake_gen_out.unsqueeze(1).transpose(3,2)), discriminator.get_features(padded_ref_mel_target_tensor.unsqueeze(1).transpose(3,2)))
     
+    # Perceptual Loss
+    # prcp_loss = perceptual_loss(fake_gen_out.permute(0,2,1), padded_ref_mel_target_tensor.permute(0,2,1))
+    
     cumulative_loss = fake_gen_adv_loss + fake_gen_mse_loss 
     cumulative_loss.backward()
     gen_optimizer.step()
@@ -241,10 +243,10 @@ def train_epoch(batch, generator: torch.nn.Module, discriminator, gen_optimizer:
     return {
         "adv_loss": fake_gen_adv_loss.detach().item(),
         "mse_loss": fake_gen_mse_loss.detach().item(),
-        "features_matching_loss": 0
+        "perceptual_loss": 0
     }
 
-def eval_epoch(batch, generator: torch.nn.Module, discriminator, gen_optimizer: torch.optim.Optimizer, dis_optimizer: torch.optim.Optimizer, device) -> float:
+def eval_epoch(batch, generator: torch.nn.Module, discriminator, perceptual_loss, device) -> float:
     """Function that perform an evaluation step on the given batch 
 
     Args:
@@ -258,44 +260,38 @@ def eval_epoch(batch, generator: torch.nn.Module, discriminator, gen_optimizer: 
     generator.eval()
     discriminator.eval()
     adv_loss = torch.nn.BCELoss()
-    trues = torch.ones((padded_ref_mel_target_tensor.shape[0],1)).to(device)
-    falses = torch.zeros((padded_ref_mel_target_tensor.shape[0],1)).to(device)
+    trues = torch.ones((5,1)).to(device)
+    falses = torch.zeros((5,1)).to(device)
     mel_lengths, ref_mel_lengths, padded_mel_tensor, padded_ref_mel_input_tensor, padded_ref_mel_target_tensor, mel_mask, ref_mel_input_mask, mel_padding_mask, ref_mel_input_padding_mask = batch
     
     with torch.no_grad():
-        fake_transformer_gen_out, fake_postnet_gen_out = generator(padded_mel_tensor, padded_ref_mel_input_tensor, mel_padding_mask, ref_mel_input_padding_mask, mel_mask, ref_mel_input_mask)
+        fake_gen_out = generator(padded_mel_tensor, padded_ref_mel_input_tensor, mel_padding_mask, ref_mel_input_padding_mask, mel_mask, ref_mel_input_mask)
         
         mask = (padded_ref_mel_target_tensor != pad_token.to(device)).to(device) # obtain a mask from the target reference
         
-        fake_transformer_dis_out = discriminator(fake_transformer_gen_out.unsqueeze(1).transpose(3,2))
-        fake_postnet_dis_out = discriminator(fake_postnet_gen_out.unsqueeze(1).transpose(3,2))
+        fake_dis_out = discriminator(fake_gen_out.unsqueeze(1).permute(0,1,3,2))
         
         # ADV Loss
-        fake_transformer_adv_loss = adv_loss(fake_transformer_dis_out, trues)
-        fake_postnet_adv_loss = adv_loss(fake_postnet_dis_out, trues)
+        fake_adv_loss = adv_loss(fake_dis_out, trues)
         
         # MSE Loss        
             # Transformer-Target Loss
-        fake_transformer_mse_loss_wout_mask = torch.functional.F.mse_loss(fake_transformer_gen_out, padded_ref_mel_target_tensor, reduction="none")
-        fake_transformer_mse_loss_w_mask = fake_transformer_mse_loss_wout_mask.where(mask, torch.tensor(0.0).to(device))
-        fake_transformer_mse_loss = fake_transformer_mse_loss_w_mask.sum() / mask.sum()
-        
-            # Postnet-Target Loss
-        fake_postnet_mse_loss_wout_mask = torch.functional.F.mse_loss(fake_postnet_gen_out, padded_ref_mel_target_tensor, reduction="none")
-        fake_postnet_mse_loss_w_mask = fake_postnet_mse_loss_wout_mask.where(mask, torch.tensor(0.0).to(device))
-        fake_postnet_mse_loss = fake_postnet_mse_loss_w_mask.sum() / mask.sum()
+        fake_gen_mse_loss_wout_mask = torch.functional.F.mse_loss(fake_gen_out, padded_ref_mel_target_tensor, reduction="none")
+        fake_gen_mse_loss_w_mask = fake_gen_mse_loss_wout_mask.where(mask, torch.tensor(0.0).to(device))
+        fake_gen_mse_loss = fake_gen_mse_loss_w_mask.sum() / mask.sum()
         
         # Features Matching Loss
-        fake_transformer_features_matching_loss = torch.functional.F.mse_loss(discriminator.get_features(fake_transformer_gen_out.unsqueeze(1).transpose(3,2)), discriminator.get_features(padded_ref_mel_target_tensor.unsqueeze(1).transpose(3,2)))
-        fake_postnet_features_matching_loss = torch.functional.F.mse_loss(discriminator.get_features(fake_postnet_gen_out.unsqueeze(1).transpose(3,2)), discriminator.get_features(padded_ref_mel_target_tensor.unsqueeze(1).transpose(3,2)))
-    
+        # fake_transformer_features_matching_loss = torch.functional.F.mse_loss(discriminator.get_features(fake_transformer_gen_out.unsqueeze(1).transpose(3,2)), discriminator.get_features(padded_ref_mel_target_tensor.unsqueeze(1).transpose(3,2)))
+        # fake_postnet_features_matching_loss = torch.functional.F.mse_loss(discriminator.get_features(fake_postnet_gen_out.unsqueeze(1).transpose(3,2)), discriminator.get_features(padded_ref_mel_target_tensor.unsqueeze(1).transpose(3,2)))
+        # prcp_loss = perceptual_loss(fake_gen_out.permute(0,2,1), padded_ref_mel_target_tensor.permute(0,2,1))
+        
     return {
-        "adv_loss": (fake_transformer_adv_loss + fake_postnet_adv_loss).item(),
-        "mse_loss": (fake_postnet_mse_loss + fake_transformer_mse_loss).item(),
-        "features_matching_loss": (fake_postnet_features_matching_loss + fake_transformer_features_matching_loss).item()
+        "adv_loss": fake_adv_loss.item(),
+        "mse_loss": fake_gen_mse_loss.item(),
+        "perceptual_loss": 0
     }
 
-def save_checkpoint(checkpoint_path: str, generator: ESTyle, discriminator, gen_optimizer: torch.optim.Optimizer, dis_optimizer: torch.optim.Optimizer, epoch: int, actual_loss: float):
+def save_checkpoint(checkpoint_path: str, generator, discriminator, gen_optimizer: torch.optim.Optimizer, dis_optimizer: torch.optim.Optimizer, epoch: int, actual_loss: float):
     """
         Save checkpoint.
         

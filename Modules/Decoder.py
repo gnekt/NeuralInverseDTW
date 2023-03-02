@@ -91,14 +91,8 @@ class Decoder(nn.Module):
         inputs = self.self_attn_norms[0](inputs + attn_output)
 
         attn_output, _ = self.attn[0](inputs, memories, memories, memories_masks.unsqueeze(1))
-        attn_output = self.attn_norms[0](attn_output)
-        
-        attn_output, _ = self.attn[1](attn_output, memories, memories, memories_masks.unsqueeze(1))
-        attn_output = self.attn_norms[1](attn_output)
-        
-        attn_output, _ = self.attn[2](attn_output, memories, memories, memories_masks.unsqueeze(1))
         attn_output = self.dropout(attn_output)
-        inputs = self.attn_norms[2](inputs + attn_output)
+        inputs = self.attn_norms[0](inputs + attn_output)
         
         mlp_feed_fwd_out = self.mlp_ffn(inputs)
         mlp_feed_fwd_out = self.dropout(mlp_feed_fwd_out)

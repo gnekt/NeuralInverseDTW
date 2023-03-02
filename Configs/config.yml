@@ -78,8 +78,8 @@ dataset_configuration:
   do_dtw: True
   data_separetor: "|"
   data_header: ["source_path","reference_path","reference_emotion"]
-  training_set_path: "Data/eng_happy_training_list.txt"
-  validation_set_path: "Data/eng_happy_validation_list.txt"
+  training_set_path: "Data/happy_training_list.txt"
+  validation_set_path: "Data/happy_validation_list.txt"
 
 preprocess_params:
   sr: 24000
@@ -100,63 +100,63 @@ training_parameter:
 model_architecture:
 
   encoder_pre_net:
-    activate: False
+    activate: True
     conv_type: "Linear"
     input_size: 80
-    output_size: 512
-    layers_configuration: [[80,256,"tanh","tanh","",0.1],[256,512,"tanh","tanh","",0]] # [InChannels, OutChannels, KernelSize, PaddingSize, WeightInitialization] x NConvLayer
+    output_size: 256
+    layers_configuration: [[80,256,"tanh","tanh","",0.1],[256,256,"tanh","tanh","",0]] # [InChannels, OutChannels, KernelSize, PaddingSize, WeightInitialization] x NConvLayer
 
   encoder:
     device: "cuda:1"
-    input_size: 80
-    output_size: 80
-    layers_configuration: [["normal",0]] # [LayerType, DropoutProb], LayerType -> (normal, residual)
+    input_size: 256
+    output_size: 256
+    layers_configuration: [["normal",0.1],["normal",0.1],["normal",0.1],["normal",0.1]] # [LayerType, DropoutProb], LayerType -> (normal, residual)
     n_heads: 16
     n_attention_layer: 1
     conv1d_ff:
-      input_size: 80
-      output_size: 80
-      layers_configuration: [[80,512,3,1,"linear","lrelu","norm",0],[512,80,3,1,"linear","lrelu","normd",.0]] # [InChannels, OutChannels, KernelSize, PaddingSize] x NConvLayer
+      input_size: 256
+      output_size: 256
+      layers_configuration: [[256,256,3,1,"linear","lrelu","norm",0],[256,256,3,1,"linear","lrelu","norm",.0]] # [InChannels, OutChannels, KernelSize, PaddingSize] x NConvLayer
     mlp_ff:
-      input_size: 80
-      output_size: 80
-      layers_configuration: [[80,512,"linear","lrelu","",0],[512,80,"linear","lrelu","",.0]] # [InChannels, OutChannels, KernelSize, PaddingSize] x NConvLayer
-    dropout: .3
+      input_size: 256
+      output_size: 256
+      layers_configuration: [[256,2048,"linear","lrelu","",0],[2048,256,"linear","lrelu","",.0]] # [InChannels, OutChannels, KernelSize, PaddingSize] x NConvLayer
+    dropout: .1
 
   decoder_pre_net:
-    activate: False
+    activate: True
     conv_type: "Linear"
     input_size: 80
-    output_size: 512
-    layers_configuration: [[80,256,"tanh","tanh","",0.1],[256,512,"tanh","tanh","",.0]] # [InChannels, OutChannels, KernelSize, PaddingSize, WeightInitialization] x NConvLayer
+    output_size: 256
+    layers_configuration: [[80,256,"tanh","tanh","",0.1],[256,256,"tanh","tanh","",.0]] # [InChannels, OutChannels, KernelSize, PaddingSize, WeightInitialization] x NConvLayer
 
   decoder:
     device: "cuda:1"
     architecture: "Custom" # else Custom
-    input_size: 80
-    output_size: 80
+    input_size: 256
+    output_size: 256
     decoder_postnet_interface_activate: True
     decoder_postnet_interface_dropout: 0.1
     decoder_postnet_interface_size: 80
     decoder_postnet_interface_activation: ""
-    layers_configuration: [["normal",0]] # [LayerType, DropoutProb], LayerType -> (normal, residual)
+    layers_configuration: [["normal",0.1],["normal",0.1],["normal",0.1],["normal",0.1],["normal",0.1],["normal",0.1],["normal",0.1],["normal",0.1],["normal",0.1],["normal",0]] # [LayerType, DropoutProb], LayerType -> (normal, residual)
     n_self_heads: 16
     n_self_attention_layer: 1
     n_encdec_heads: 16
-    n_encdec_attention_layer: 3
+    n_encdec_attention_layer: 1
     conv1d_ff:
-      input_size: 80
-      output_size: 80
-      layers_configuration: [[80,512,3,1,"linear","lrelu","",0],[2048,512,3,1,"linear","lrelu","",.0]] # [InChannels, OutChannels, KernelSize, PaddingSize] x NConvLayer
+      input_size: 256
+      output_size: 256
+      layers_configuration: [[256,2048,3,1,"linear","lrelu","",0],[2048,256,3,1,"linear","lrelu","",.0]] # [InChannels, OutChannels, KernelSize, PaddingSize] x NConvLayer
     mlp_ff:
-      input_size: 80
-      output_size: 80
-      layers_configuration: [[80,512,"linear","lrelu","",0],[512,512,"linear","lrelu","",0],[512,80,"linear","lrelu","",.0]] # [InChannels, OutChannels, KernelSize, PaddingSize] x NConvLayer
-    dropout: .3 # Internal Layer Dropout
+      input_size: 256
+      output_size: 256
+      layers_configuration: [[256,2048,"linear","lrelu","",0],[2048,256,"linear","lrelu","",.0]] # [InChannels, OutChannels, KernelSize, PaddingSize] x NConvLayer
+    dropout: .1 # Internal Layer Dropout
 
   post_net:
     conv_type: "1D"
-    activate: True
+    activate: False
     is_skip: False
     input_size: 80
     output_size: 80

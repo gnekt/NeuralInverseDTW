@@ -68,14 +68,11 @@ class Encoder(nn.Module):
         attn_out, _ = self.self_attn[0](inputs,inputs,inputs, masks.unsqueeze(1))
         attn_out = self.dropout(attn_out)
         inputs = self.self_attn_norms[0](attn_out + inputs)
-                
-        conv_feed_fwd_out = self.conv1d_ffn(inputs)
-        conv_feed_fwd_out = self.dropout(conv_feed_fwd_out)
-        conv_feed_fwd_out = self.conv1_ffn_norm(conv_feed_fwd_out + inputs)
+
         
-        mlp_feed_fwd_out = self.mlp_ffn(conv_feed_fwd_out)
+        mlp_feed_fwd_out = self.mlp_ffn(inputs)
         mlp_feed_fwd_out = self.dropout(mlp_feed_fwd_out)
-        out = self.mlp_ffn_norm(mlp_feed_fwd_out + conv_feed_fwd_out)
+        out = self.mlp_ffn_norm(mlp_feed_fwd_out + inputs)
         return out
     
         

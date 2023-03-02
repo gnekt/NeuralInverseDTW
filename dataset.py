@@ -123,7 +123,7 @@ class Dataset(torch.utils.data.Dataset):
             if random.random() < 0.5:
                 random_scale = random.uniform(0.4,0.9)
         
-        mel_tensor = self._convnet_load_data(row["source_path"],random_scale)
+        mel_tensor = self._load_data(row["source_path"],random_scale)
         ref_mel_tensor = self._load_data(row["reference_path"],random_scale)
         
         if not self.validation:

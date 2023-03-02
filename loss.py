@@ -2,12 +2,18 @@ import torch
 from munch import Munch
 from torch import Tensor
 from typing import Tuple
+from Utils.ASR.models import ASRCNN
+import yaml
+import torch.nn.functional as F
+from Utils.token import pad_token
+from sklearn.preprocessing import MinMaxScaler
+from pickle import load
 
-class ESTyleLoss():
+class PerceptualLoss():
     """Model Loss
     """    
     
-    def __init__(self, losses: Munch, pad_token: Tensor, device: str):
+    def __init__(self, device: str):
         """Constructor
 
         Args:
@@ -15,11 +21,34 @@ class ESTyleLoss():
             pad_token (n_mels,1): The pad token
             device (str): Device name
         """        
-
-        self.pad_token = pad_token.to(device)
         self.device = device
         
-    def evaluate(self, src_transformer: Tensor, src_postnet: Tensor, tgt: Tensor, src_lengths: Tensor, tgt_lengths: Tensor) -> Tuple[Tensor, Tensor]:
+        self.pad_token = pad_token.to(self.device)
+        
+        
+        with open("Utils/ASR/config.yml") as f:
+                ASR_config = yaml.safe_load(f)
+        ASR_model_config = ASR_config['model_params']
+        self.ASR_model = ASRCNN(**ASR_model_config)
+        params = torch.load("Utils/ASR/epoch_00100.pth", map_location=self.device)['model']
+        self.ASR_model.load_state_dict(params)
+        _ = self.ASR_model.eval()
+        self.ASR_model.to(self.device)
+        
+        for param in self.ASR_model.parameters():
+            param.requires_grad = False
+            
+        # load pretrained F0 model
+        # self.F0_model = JDCNet(num_class=1, seq_len=192)
+        # params = torch.load("Utils/JDC/bst.t7", map_location=self.device)['net']
+        # self.F0_model.load_state_dict(params)
+        # _ = self.F0_model.eval()
+        # self.F0_model.to(self.device)
+        
+        # for param in self.F0_model.parameters():
+        #     param.requires_grad = False
+            
+    def __call__(self, fake_src: Tensor, real_tgt: Tensor) -> Tuple[Tensor, Tensor]:
         """Evaluate loss among the output of the decoder and the target reference
 
         Args:
@@ -31,19 +60,33 @@ class ESTyleLoss():
         Returns:
             Loss
         """  
-        mask = (tgt != self.pad_token).to(self.device) # obtain a mask from the target reference
         
-        # Transformer-Target Loss
-        loss_transf_wout_mask = torch.functional.F.mse_loss(src_transformer,tgt, reduction="none")
-        loss_transf_masked_w_zero = loss_transf_wout_mask.where(mask, torch.tensor(0.0).to(self.device))
-        loss_transf = loss_transf_masked_w_zero.sum() / mask.sum()
+        # ASR Loss
+        with torch.no_grad():
+            real_tgt_ASR = self.ASR_model.get_feature(real_tgt)
+            fake_src_ASR = self.ASR_model.get_feature(fake_src)
+        loss_asr = F.smooth_l1_loss(real_tgt_ASR,fake_src_ASR)
         
-        # Postnet-Target Loss
-        loss_post = torch.functional.F.mse_loss(torch.tensor(0.0),torch.tensor(0.0))
-        if src_postnet is not None:
-            loss_post_wout_mask = torch.functional.F.mse_loss(src_postnet, tgt, reduction="none")
-            loss_post_masked_w_zero = loss_post_wout_mask.where(mask, torch.tensor(0.0).to(self.device))
-            loss_post = loss_post_masked_w_zero.sum() / mask.sum()
+        # with torch.no_grad():
+        #     fake_src_F0, _, _ = self.F0_model(fake_src)
+        #     real_tgt_F0, _,  _ = self.F0_model(real_tgt)
+        # loss_f0 = F.smooth_l1_loss(fake_src_F0, real_tgt_F0, reduction="none") 
+        # loss_f0_masked = loss_f0.where(mask[:,0,0,:], torch.tensor(0.0).to(self.device))
+        # loss_f0 = loss_f0_masked.sum() / mask.sum()
         
-        return loss_transf+loss_post, loss_transf, loss_post 
+        return loss_asr * 5
+  
+  
+def compute_mean_f0(f0):
+    f0_mean = f0.mean(-1)
+    f0_mean = f0_mean.expand(f0.shape[-1], f0_mean.shape[0]).transpose(0, 1) # (B, M)
+    return f0_mean
+
+def f0_loss(x_f0, y_f0, mask, device):
+    """
+    x.shape = (B, 1, M, L): predict
+    y.shape = (B, 1, M, L): target
+    """
+    # compute the mean
     
+    return loss
