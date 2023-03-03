@@ -39,13 +39,15 @@ class FCNet(nn.Module):
             for index,(_,_,_,_,_,dropout)
             in enumerate(model_architecture.layers_configuration)
             ])
-        self.lrelu = nn.LeakyReLU(0.2)
+        self.lrelu = nn.LeakyReLU()
     
 
     def forward(self, input: Tensor) -> Tensor:
         _input = input
         for fc_l, norm_l, dropout_l, layer_configuration in zip(self.fc_layers, self.norm_layers, self.dropout_layers, self.layers_configuration):
             fc_out = fc_l(_input)
+            if layer_configuration[4] == 'norm':
+                fc_out = norm_l(fc_out)
             _activation= None  
             if layer_configuration[3] == 'relu':
                 _activation = torch.relu(fc_out)  
@@ -57,11 +59,6 @@ class FCNet(nn.Module):
                 _activation = self.lrelu(fc_out)
             if layer_configuration[3] == 'tanh':
                 _activation = torch.tanh(fc_out)
-            _input = dropout_l(norm_l(_activation))
-            # if layer_configuration[4] == 'residual':
-            #     _activation = dropout_l(_activation)
-            #     _input = norm_l((_activation + _input))  # Why this? I need to batch over the embedding dimension, remember the input shape
-            # else:
-            #     _input = dropout_l(norm_l(_activation)) # Why this? I need to batch over the embedding dimension, remember the input shape
+            _input = dropout_l(_activation)
         output = _input
         return output

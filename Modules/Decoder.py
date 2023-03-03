@@ -42,11 +42,11 @@ class Decoder(nn.Module):
         
         self.pre_self_norm = nn.LayerNorm(self.input_size)
         
-        self.self_attn = clones(MyMultiHeadAttention(self.input_size, model_architecture.n_self_heads,model_architecture.dropout, self.device) ,model_architecture.n_self_attention_layer)
+        self.self_attn = clones(MyMultiHeadAttention(self.input_size, model_architecture.n_self_heads,model_architecture.dropout) ,model_architecture.n_self_attention_layer)
         self.self_attn_norms = clones(nn.LayerNorm(self.input_size) ,model_architecture.n_self_attention_layer)
         self.self_attn_fc_layers =  clones(nn.Linear(self.input_size,self.input_size), model_architecture.n_self_attention_layer)
         
-        self.attn = clones(MyMultiHeadAttention(self.input_size, model_architecture.n_encdec_heads,model_architecture.dropout, self.device) ,model_architecture.n_encdec_attention_layer)
+        self.attn = clones(MyMultiHeadAttention(self.input_size, model_architecture.n_encdec_heads,model_architecture.dropout) ,model_architecture.n_encdec_attention_layer)
         self.attn_norms = clones(nn.LayerNorm(self.input_size) ,model_architecture.n_encdec_attention_layer)
         self.attn_fc_layers =  clones(nn.Linear(self.input_size,self.input_size), model_architecture.n_encdec_attention_layer)
         
@@ -86,11 +86,11 @@ class Decoder(nn.Module):
         
         inputs = self.pre_self_norm(inputs)
         causal_mask = self._generate_square_subsequent_mask(inputs.shape[1])
-        attn_output, _ = self.self_attn[0](inputs,inputs,inputs, (input_mask.unsqueeze(1) | causal_mask))
+        attn_output, _ = self.self_attn[0](inputs, mask=(input_mask.unsqueeze(1) | causal_mask))
         attn_output = self.dropout(attn_output)
         inputs = self.self_attn_norms[0](inputs + attn_output)
 
-        attn_output, _ = self.attn[0](inputs, memories, memories, memories_masks.unsqueeze(1))
+        attn_output, _ = self.attn[0](inputs, memories, memories_masks.unsqueeze(1))
         attn_output = self.dropout(attn_output)
         inputs = self.attn_norms[0](inputs + attn_output)
         

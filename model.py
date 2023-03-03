@@ -179,16 +179,15 @@ class ESTyle(nn.Module):
             decpost_output = self.decpost_interface(decoder_output)
             if self.decpost_interface_activation is not None:
                 decpost_output = self.decpost_interface_activation(decpost_output)
-        
+            
         ###
         postnet_output = decpost_output
         if self.post_net_parameter["activate"]:
-            decpost_out_norm = self.decpost_interface_norm(decpost_output)
-            decpost_out_norm = self.decpost_interface_dropout(decpost_out_norm)
-            postnet_output = self.postnet(decpost_out_norm)
+            decpost_output = self.decpost_interface_dropout(decpost_output)
+            postnet_output = self.postnet(postnet_output)
             if self.post_net_parameter["is_skip"]:
                 postnet_output = self.postnet_dropout(postnet_output)
-                postnet_output = postnet_output + decpost_out_norm
+                postnet_output = postnet_output + decpost_output
             
         return postnet_output
     

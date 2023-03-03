@@ -15,10 +15,10 @@ import os
 from model import ESTyle
 import os.path as osp
 
-
+Model = "iDTW"
 
 # Do NOT TOUCH
-config = yaml.safe_load(open("Configs/config.yml"))
+config = yaml.safe_load(open(f"Models/{Model}/config.yml"))
 MEL_PARAMS = config.get('preprocess_params', {})
 
 ### Get configuration
@@ -44,7 +44,7 @@ MELSPEC_PARAMS = {
 }
 
 to_melspec = torchaudio.transforms.MelSpectrogram(**MELSPEC_PARAMS)
-scaler = load(open("dataset/scaler.pk","rb"))
+scaler = load(open("dataset/scaler.pkl","rb"))
 
 
 model = ESTyle(model_architecture,DEVICE)
@@ -82,9 +82,9 @@ def load_data(wav_path: str) -> torch.Tensor:
             (MelBand, T_Mel): Mel-Spectrogram of the wav file
         """
         wave_tensor = generate_wav_tensor(wav_path)
-        tensor = to_melspec(wave_tensor)
-        scaled_tensor = (torch.log(1e-5 + tensor) - (-4)) / 4
-        return torch.FloatTensor(scaled_tensor).transpose(1,0)
+        tensor = to_melspec(wave_tensor).transpose(1,0)
+        scaled_tensor = scaler.transform(torch.log(tensor+1e-5))
+        return torch.FloatTensor(scaled_tensor)
     
 def generate_wav_tensor(wave_path: str) -> torch.Tensor:
     """Private methods that trasform a wav file into a tensor
@@ -102,13 +102,13 @@ def generate_wav_tensor(wave_path: str) -> torch.Tensor:
 
 
 
-in_datta = load_data("ex_6_happy_b.wav")
+in_datta = load_data("..//StarGANv2-EmotionalVC/dataset/eng/ESD/0015/Neutral/0015_000329.wav")
 
 
 model.eval()
 model.to(device)
 out = model.inference(in_datta.unsqueeze(0).to(device), DEVICE)
-from pickle import load
+out = (scaler.inverse_transform(out[0].cpu().detach().numpy()) - -4 )/4
 
 # out = load(open("Fruits.pkl", "rb"))
 
@@ -121,8 +121,8 @@ _ = vocoder.eval()
 
 
 with torch.no_grad():
-        c = out.to("cpu")
-        y_out = vocoder.inference(c[0])
+        c = torch.FloatTensor(out)
+        y_out = vocoder.inference(c)
         y_out = y_out.view(-1).cpu()
             
 print("storing sample..")

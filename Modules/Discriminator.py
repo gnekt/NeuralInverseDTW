@@ -69,9 +69,7 @@ class GlobalFeaturesDiscriminator(nn.Module):
     
     def get_features(self, x: Tensor):
         x = self.i_interface(x)
-        
-        for block in self.encode[:int(len(self.encode)/2)]:
-            x = block(x)
+        x = self.encode[0](x)
             
         return x
 

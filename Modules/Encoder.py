@@ -42,7 +42,7 @@ class Encoder(nn.Module):
         
         self.pre_self_norm = nn.LayerNorm(self.input_size)
         
-        self.self_attn = clones(MyMyultiheadAttention(self.input_size, self.n_heads,model_architecture.dropout, self.device) ,self.n_attention)
+        self.self_attn = clones(MyMyultiheadAttention(self.input_size, self.n_heads,model_architecture.dropout) ,self.n_attention)
         self.self_attn_norms = clones(nn.LayerNorm(self.input_size) ,self.n_attention)
         self.self_attn_fc_layers =  clones(nn.Linear(self.input_size,self.input_size), self.n_attention)
         
@@ -65,7 +65,7 @@ class Encoder(nn.Module):
             padding_masks (Tensor) ->  (N_Sample, max(T_Mel among all the sample)): Padding mask for encoder input
         """        
         inputs = self.pre_self_norm(inputs)
-        attn_out, _ = self.self_attn[0](inputs,inputs,inputs, masks.unsqueeze(1))
+        attn_out, _ = self.self_attn[0](inputs, mask=masks.unsqueeze(1))
         attn_out = self.dropout(attn_out)
         inputs = self.self_attn_norms[0](attn_out + inputs)
 

@@ -36,7 +36,7 @@ validation_path = config.get('validation_path', "Data/happy_validation_list_aug.
 emotion_path = "dataset/happy_conversion.txt"
 dataframe = pd.read_csv("dataset/dataset.csv", sep=";")
 happy_dataframe = dataframe[(dataframe["emotion"] == "happy") | (dataframe["emotion"] == "neutral")].sample(frac=1)
-happy_dataframe = dataframe[dataframe["lang"] == "eng"]
+happy_dataframe = dataframe[(dataframe["lang"] == "eng") & (dataframe["dataset"] == "jl")]
 happy_dataframe = happy_dataframe.fillna("")
 happy_dataframe['actor_id'] = happy_dataframe['actor_id'].astype(str)
 # pick sample for training and validation
@@ -45,38 +45,26 @@ happy_dataframe['actor_id'] = happy_dataframe['actor_id'].astype(str)
 
 emotion_conversion_file = open(emotion_path,"w")
 # Create training file
-for index, group in happy_dataframe.groupby(["dataset","actor_id","statement_id","augmentation"]):
+for index, group in happy_dataframe.groupby(["dataset","actor_id","gender","statement_id"]):
     emotional_df = group[happy_dataframe["emotion"] != "neutral"]
     try:
-        neutral_row = group[happy_dataframe["emotion"] == "neutral"].iloc[0]
+        neutral_rows = group[happy_dataframe["emotion"] == "neutral"]
     except IndexError:
-        continue
-    neutral_row['path'] = f"../{neutral_row['path'][2:]}"
-    
+        continue   
+    for index,neutral_row in  neutral_rows.iterrows():
     # neutral_row_path = f"./{neutral_row['lang']}/{neutral_row['dataset']}/{neutral_row['path'][2:]}"
-    for index,row in emotional_df.iterrows():
-        if "noise" in row["augmentation"]:
-            row = happy_dataframe[(happy_dataframe["dataset"] == row["dataset"]) & 
-                            (happy_dataframe["actor_id"] == row["actor_id"]) & 
-                            (happy_dataframe["statement_id"] == row["statement_id"]) & 
-                            (happy_dataframe["augmentation"] == "") &
-                            (happy_dataframe["emotion"] == row["emotion"])].iloc[-1]
-        row['path'] = f"..{row['path'][2:]}"
-        row['emotion']=emotion_map[row['emotion']]
-        try:
-            emotional_row_path = f"./{row['lang']}/{row['dataset']}/{row['path'][2:]}"
-            emotion_conversion_file.write(f"{neutral_row['path']}|{row['path']}\n")
-        except IOError as e:
-            print(e)
-        if row["lang"] == "fr":
-            break
+        for index,row in emotional_df.iterrows():
+            try:
+                emotion_conversion_file.write(f"{neutral_row['path']}|{row['path']}\n")
+            except IOError as e:
+                print(e)
 emotion_conversion_file.close()
 
-emotion_path = "dataset/happy_conversion.txt"
-dataframe = pd.read_csv(emotion_path, sep=";").sample(frac=1)
+# emotion_path = "dataset/happy_conversion.txt"
+# dataframe = pd.read_csv(emotion_path, sep=";").sample(frac=1)
 
-training_dataframe = dataframe.iloc[0:int((dataframe.shape[0]*training_set_percentage)/100)].to_csv("Data/happy_training_list_aug.txt", index=False, header=None)
-validation_dataframe = dataframe.iloc[dataframe.shape[0]-int((dataframe.shape[0]*validation_set_percentage)/100):].to_csv("Data/happy_validation_list_aug.txt", index=False, header=None)
+# training_dataframe = dataframe.iloc[0:int((dataframe.shape[0]*training_set_percentage)/100)].to_csv("Data/happy_training_list_aug.txt", index=False, header=None)
+# validation_dataframe = dataframe.iloc[dataframe.shape[0]-int((dataframe.shape[0]*validation_set_percentage)/100):].to_csv("Data/happy_validation_list_aug.txt", index=False, header=None)
 
 
     

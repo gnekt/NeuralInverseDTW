@@ -47,7 +47,7 @@ MELSPEC_PARAMS = {
 }
 
 to_melspec = torchaudio.transforms.MelSpectrogram(**MELSPEC_PARAMS)
-scaler = load(open("dataset/scaler.pk","rb"))
+scaler = load(open("dataset/scaler.pkl","rb"))
 
 def load_data(wav_path: str) -> torch.Tensor:
         """Produce mel-spectrogram given a wav file

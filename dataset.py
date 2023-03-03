@@ -93,7 +93,7 @@ class Dataset(torch.utils.data.Dataset):
         self.dataset["already_used"] = False
         self.validation = validation
         self.to_melspec = torchaudio.transforms.MelSpectrogram(**MELSPEC_PARAMS)
-        self.scaler: MinMaxScaler = load(open('dataset/scaler.pk', 'rb'))
+        self.scaler: MinMaxScaler = load(open('dataset/scaler.pkl', 'rb'))
         self.max_t_mel = 192 
         self.do_dtw = do_dtw
         print(validation)
@@ -120,17 +120,13 @@ class Dataset(torch.utils.data.Dataset):
         row = self.dataset.iloc[idx]
         random_scale = 0
         if not self.validation:
-            if random.random() < 0.5:
-                random_scale = random.uniform(0.4,0.9)
+            random_scale = random.uniform(0.4,1)
         
         mel_tensor = self._load_data(row["source_path"],random_scale)
         ref_mel_tensor = self._load_data(row["reference_path"],random_scale)
         
         if not self.validation:
             if random.random() < 0.5:
-                noise = torch.randn_like(mel_tensor) * random.uniform(0.1,0.2)
-                mel_tensor = mel_tensor + noise
-            elif random.random() < 0.5:
                 mask_width = random.randint(1,3)
                 seq_len, num_bands = mel_tensor.shape
                 for _ in range(random.randint(1,4)):
@@ -172,9 +168,9 @@ class Dataset(torch.utils.data.Dataset):
         wave_tensor: Tensor = self._generate_wav_tensor(wav_path)
         if random_scale != 0:
             wave_tensor = random_scale * wave_tensor
-        tensor: Tensor = self.to_melspec(wave_tensor)
-        scaled_tensor: Tensor = (torch.log(1e-5 + tensor) - mean) / std
-        return torch.FloatTensor(scaled_tensor).transpose(1,0)
+        tensor: Tensor = self.to_melspec(wave_tensor).transpose(1,0)
+        scaled_tensor: Tensor = self.scaler.transform(torch.log(tensor+1e-5))
+        return torch.FloatTensor(scaled_tensor)
     
     def _generate_wav_tensor(self, wave_path: str) -> torch.Tensor:
         """Private methods that trasform a wav file into a tensor
